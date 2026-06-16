@@ -1,5 +1,6 @@
 from lulu_agent.agent_loop import AgentLoop
 from lulu_agent.config import ConfigError
+from lulu_agent.llm_client import LLMClientError
 
 
 def main():
@@ -26,7 +27,11 @@ def main():
             print("bye")
             break
 
-        response = agent.run(user_input)
+        try:
+            response = agent.run(user_input)
+        except LLMClientError as exc:
+            print(f"LLM error: {exc}")
+            continue
         print('[agent response:]', response)
 
 
