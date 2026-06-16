@@ -1,10 +1,15 @@
 from lulu_agent.agent_loop import AgentLoop
-from lulu_agent.config import OPENAI_MODEL
+from lulu_agent.config import ConfigError
 
 
 def main():
-    agent = AgentLoop()
-    print(f"lulu-agent started. model={OPENAI_MODEL}")
+    try:
+        agent = AgentLoop()
+    except ConfigError as exc:
+        print(f"Config error: {exc}")
+        return
+
+    print(f"lulu-agent started. model={agent.llm_client.model}")
     print("Type /exit or /quit to exit.")
 
     while True:

@@ -1,10 +1,14 @@
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+class ConfigError(RuntimeError):
+    pass
+
 
 @dataclass
 class Config:
@@ -12,20 +16,27 @@ class Config:
     openai_api_key: str
     openai_model: str
 
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or ""
-if not OPENAI_BASE_URL:
-    raise RuntimeError("Missing required environment variable: OPENAI_BASE_URL")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
-if not OPENAI_API_KEY:
-    raise RuntimeError("Missing required environment variable: OPENAI_API_KEY")
+def load_config() -> Config:
+    return Config(
+        openai_api_key=os.getenv("OPENAI_API_KEY") or "",
+        openai_base_url=os.getenv("OPENAI_BASE_URL") or "",
+        openai_model=os.getenv("OPENAI_MODEL") or "",
+    )
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL") or ""
-if not OPENAI_MODEL:
-    raise RuntimeError("Missing required environment variable: OPENAI_MODEL")
 
-config = Config(
-    openai_api_key=OPENAI_API_KEY,
-    openai_base_url=OPENAI_BASE_URL,
-    openai_model=OPENAI_MODEL,
-)
+def validate_config(config: Config) -> None:
+    missing = []
+    if not config.openai_base_url:
+        missing.append("OPENAI_BASE_URL")
+    if not config.openai_api_key:
+        missing.append("OPENAI_API_KEY")
+    if not config.openai_model:
+        missing.append("OPENAI_MODEL")
+
+    if missing:
+        names = ", ".join(missing)
+        raise ConfigError(f"Missing required environment variable(s): {names}")
+
+
+config = load_config()

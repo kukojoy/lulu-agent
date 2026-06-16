@@ -1,10 +1,11 @@
 from openai import OpenAI
 
-from lulu_agent.config import config
+from lulu_agent.config import validate_config
 
 
 class LLMClient:
     def __init__(self, config):
+        validate_config(config)
         self.model = config.openai_model
         self.client = OpenAI(
             api_key=config.openai_api_key,
