@@ -2,7 +2,7 @@ import json
 
 from lulu_agent.config import config
 from lulu_agent.llm_client import LLMClient
-from lulu_agent.tools import ToolRegistry, create_tool_registry
+from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 
 
 SYSTEM_PROMPT = """You are a local coding agent.
@@ -43,9 +43,9 @@ class AgentLoop:
                 return message.content or ""
 
             for tool_call in tool_calls:
-                args = json.loads(tool_call.function.arguments or "{}")
+                args, parse_error = self._parse_tool_arguments(tool_call.function.arguments)
                 print(f"[tool] {tool_call.function.name} args={args}")
-                result = self.tool_registry.dispatch(tool_call.function.name, args)
+                result = parse_error or self.tool_registry.dispatch(tool_call.function.name, args)
                 print(f"[tool result] ok={result.ok} output={result.output} error={result.error}")
                 messages.append(
                     {
@@ -56,6 +56,26 @@ class AgentLoop:
                 )
 
         return "Reached max turns before completing the task."
+
+    def _parse_tool_arguments(self, raw_arguments: str | None) -> tuple[dict, ToolResult | None]:
+        if not raw_arguments:
+            return {}, None
+
+        try:
+            args = json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            return {}, ToolResult(
+                ok=False,
+                error=f"Invalid tool arguments JSON: {exc.msg}",
+            )
+
+        if not isinstance(args, dict):
+            return {}, ToolResult(
+                ok=False,
+                error="Tool arguments must be a JSON object.",
+            )
+
+        return args, None
 
     def _assistant_message_to_dict(self, message) -> dict:
         result = {
