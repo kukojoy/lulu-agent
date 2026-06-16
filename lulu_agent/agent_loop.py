@@ -51,7 +51,7 @@ class AgentLoop:
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(result.__dict__, ensure_ascii=False),
+                        "content": result.to_json(),
                     }
                 )
 

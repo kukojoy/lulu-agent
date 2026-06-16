@@ -3,3 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+AGENTS.md
+task.md
+tests/

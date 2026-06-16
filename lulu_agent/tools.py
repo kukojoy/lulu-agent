@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -7,6 +8,16 @@ class ToolResult:
     ok: bool
     output: Any = None
     error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "output": self.output,
+            "error": self.error,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False)
 
 
 @dataclass
@@ -35,6 +46,12 @@ class ToolRegistry:
         if tool.name in self._tools:
             raise ValueError(f"Tool already registered: {tool.name}")
         self._tools[tool.name] = tool
+
+    def names(self) -> list[str]:
+        return list(self._tools.keys())
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
 
     def schemas(self) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self._tools.values()]
@@ -72,4 +89,3 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(write_file)
     registry.register(run_shell)
     return registry
-
