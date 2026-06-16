@@ -3,6 +3,16 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+JSON_TYPE_CHECKS = {
+    "array": list,
+    "boolean": bool,
+    "integer": int,
+    "number": (int, float),
+    "object": dict,
+    "string": str,
+}
+
+
 @dataclass
 class ToolResult:
     ok: bool
@@ -61,6 +71,10 @@ class ToolRegistry:
         if not tool:
             return ToolResult(ok=False, error=f"Unknown tool: {name}")
 
+        validation_error = validate_tool_args(tool, args)
+        if validation_error:
+            return ToolResult(ok=False, error=validation_error)
+
         try:
             return tool.handler(args)
         except Exception as exc:
@@ -77,6 +91,65 @@ def tool(name: str, description: str, parameters: dict[str, Any]):
         )
 
     return decorator
+
+
+def validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
+    parameters = tool.parameters
+    required = parameters.get("required", [])
+    properties = parameters.get("properties", {})
+
+    for name in required:
+        if name not in args:
+            return f"Missing required argument '{name}' for tool '{tool.name}'."
+
+    for name, value in args.items():
+        schema = properties.get(name)
+        if not schema:
+            continue
+
+        expected_type = schema.get("type")
+        if not expected_type:
+            continue
+
+        if not _matches_json_type(value, expected_type):
+            return (
+                f"Invalid argument '{name}' for tool '{tool.name}': "
+                f"expected {expected_type}, got {_json_type_name(value)}."
+            )
+
+    return None
+
+
+def _matches_json_type(value: Any, expected_type: str) -> bool:
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    check = JSON_TYPE_CHECKS.get(expected_type)
+    if not check:
+        return True
+
+    return isinstance(value, check)
+
+
+def _json_type_name(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if value is None:
+        return "null"
+    return type(value).__name__
 
 
 def create_tool_registry() -> ToolRegistry:
