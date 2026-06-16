@@ -43,19 +43,23 @@ class AgentLoop:
                 return message.content or ""
 
             for tool_call in tool_calls:
-                args, parse_error = self._parse_tool_arguments(tool_call.function.arguments)
-                print(f"[tool] {tool_call.function.name} args={args}")
-                result = parse_error or self.tool_registry.dispatch(tool_call.function.name, args)
-                print(f"[tool result] ok={result.ok} output={result.output} error={result.error}")
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result.to_json(),
-                    }
-                )
+                messages.append(self._handle_tool_call(tool_call))
 
         return "Reached max turns before completing the task."
+
+    def _handle_tool_call(self, tool_call) -> dict:
+        tool_name = tool_call.function.name
+        args, parse_error = self._parse_tool_arguments(tool_call.function.arguments)
+
+        self._print_tool_call(tool_name, args)
+        result = parse_error or self.tool_registry.dispatch(tool_name, args)
+        self._print_tool_result(result)
+
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": result.to_json(),
+        }
 
     def _parse_tool_arguments(self, raw_arguments: str | None) -> tuple[dict, ToolResult | None]:
         if not raw_arguments:
@@ -76,6 +80,12 @@ class AgentLoop:
             )
 
         return args, None
+
+    def _print_tool_call(self, name: str, args: dict) -> None:
+        print(f"[tool] {name} args={args}")
+
+    def _print_tool_result(self, result: ToolResult) -> None:
+        print(f"[tool result] ok={result.ok} output={result.output} error={result.error}")
 
     def _assistant_message_to_dict(self, message) -> dict:
         result = {
