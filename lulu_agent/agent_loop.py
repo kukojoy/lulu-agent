@@ -23,30 +23,34 @@ class AgentLoop:
         self.llm_client = llm_client or LLMClient(config)
         self.tool_registry = tool_registry or create_tool_registry()
         self.max_turns = max_turns
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     def run(self, user_input: str) -> str:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
-        ]
+        self._append_user_message(user_input)
 
         for _ in range(self.max_turns):
             response = self.llm_client.chat(
-                messages=messages,
+                messages=self.messages,
                 tools=self.tool_registry.schemas(),
             )
             message = response.choices[0].message
             tool_calls = message.tool_calls or []
 
-            messages.append(self._assistant_message_to_dict(message))
+            self._append_assistant_message(message)
 
             if not tool_calls:
                 return message.content or ""
 
             for tool_call in tool_calls:
-                messages.append(self._handle_tool_call(tool_call))
+                self.messages.append(self._handle_tool_call(tool_call))
 
         return "Reached max turns before completing the task."
+
+    def _append_user_message(self, content: str) -> None:
+        self.messages.append({"role": "user", "content": content})
+
+    def _append_assistant_message(self, message) -> None:
+        self.messages.append(self._assistant_message_to_dict(message))
 
     def _handle_tool_call(self, tool_call) -> dict:
         tool_name = tool_call.function.name
