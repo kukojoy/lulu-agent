@@ -1,6 +1,9 @@
 import subprocess
 
-from lulu_agent.tools import ToolResult, tool
+from lulu_agent.tools import ToolResult, tool, truncate_text
+
+
+MAX_SHELL_OUTPUT_CHARS = 4000
 
 
 @tool(
@@ -27,9 +30,8 @@ def run_shell(args):
     return ToolResult(
         ok=result.returncode == 0,
         output={
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": truncate_text(result.stdout, MAX_SHELL_OUTPUT_CHARS),
+            "stderr": truncate_text(result.stderr, MAX_SHELL_OUTPUT_CHARS),
             "exit_code": result.returncode,
         },
     )
-

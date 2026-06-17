@@ -22,8 +22,17 @@ from lulu_agent.tools import ToolResult, tool
     },
 )
 def write_file(args):
-    path = Path(args["path"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(args["content"], encoding="utf-8")
-    return ToolResult(ok=True, output=f"Wrote file: {path}")
+    path = Path(args["path"]).resolve()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(args["content"], encoding="utf-8")
+    except OSError as exc:
+        return ToolResult(ok=False, error=f"Failed to write file {path}: {exc}")
 
+    return ToolResult(
+        ok=True,
+        output={
+            "path": str(path),
+            "content_length": len(args["content"]),
+        },
+    )

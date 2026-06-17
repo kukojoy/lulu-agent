@@ -12,6 +12,8 @@ JSON_TYPE_CHECKS = {
     "string": str,
 }
 
+DEFAULT_MAX_TEXT_CHARS = 4000
+
 
 @dataclass
 class ToolResult:
@@ -118,6 +120,16 @@ def validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
             )
 
     return None
+
+
+def truncate_text(text: str, max_chars: int = DEFAULT_MAX_TEXT_CHARS) -> dict[str, Any]:
+    original_length = len(text)
+    truncated = original_length > max_chars
+    return {
+        "text": text[:max_chars] if truncated else text,
+        "truncated": truncated,
+        "original_length": original_length,
+    }
 
 
 def _matches_json_type(value: Any, expected_type: str) -> bool:
