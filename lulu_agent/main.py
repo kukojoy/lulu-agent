@@ -1,9 +1,12 @@
 from lulu_agent.agent_loop import AgentLoop
+from lulu_agent.cli_input import read_user_input, setup_line_editing
 from lulu_agent.config import ConfigError
 from lulu_agent.llm_client import LLMClientError
 
 
 def main():
+    setup_line_editing()
+
     try:
         agent = AgentLoop()
     except ConfigError as exc:
@@ -15,7 +18,7 @@ def main():
 
     while True:
         try:
-            user_input = input("\nlulu-agent> ").strip()
+            user_input = read_user_input("\nlulu-agent> ").strip()
             print('[user query:]', user_input)
         except EOFError:
             print('[EOFError] bye')
