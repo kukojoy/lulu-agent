@@ -165,7 +165,9 @@ def _json_type_name(value: Any) -> str:
 
 
 def create_tool_registry() -> ToolRegistry:
+    from lulu_agent.native_tools.list_files import list_files
     from lulu_agent.native_tools.read_file import read_file
+    from lulu_agent.native_tools.replace_in_file import replace_in_file
     from lulu_agent.native_tools.run_shell import run_shell
     from lulu_agent.native_tools.write_file import write_file
 
@@ -173,4 +175,6 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(read_file)
     registry.register(write_file)
     registry.register(run_shell)
+    registry.register(list_files)
+    registry.register(replace_in_file)
     return registry
