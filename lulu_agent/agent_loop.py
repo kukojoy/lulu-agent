@@ -1,6 +1,7 @@
 import json
 
 from lulu_agent.config import config
+from lulu_agent.context_manager import ContextManager
 from lulu_agent.llm_client import LLMClient
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 
@@ -18,10 +19,12 @@ class AgentLoop:
         self,
         llm_client: LLMClient | None = None,
         tool_registry: ToolRegistry | None = None,
+        context_manager: ContextManager | None = None,
         max_turns: int = 10,
     ):
         self.llm_client = llm_client or LLMClient(config)
         self.tool_registry = tool_registry or create_tool_registry()
+        self.context_manager = context_manager or ContextManager()
         self.max_turns = max_turns
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -29,8 +32,9 @@ class AgentLoop:
         self._append_user_message(user_input)
 
         for _ in range(self.max_turns):
+            request_messages = self.context_manager.prepare_messages(self.messages)
             response = self.llm_client.chat(
-                messages=self.messages,
+                messages=request_messages,
                 tools=self.tool_registry.schemas(),
             )
             message = response.choices[0].message
