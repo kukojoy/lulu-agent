@@ -123,6 +123,11 @@ class SessionStore:
             return sessions
         return sessions[:limit]
 
+    def validate_session(self, session_id: str) -> None:
+        """验证指定 session 是否存在, 是否能正常加载 metadata 和消息"""
+        self._get_latest_metadata_for_session(session_id)
+        self.load_messages(session_id)
+
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         """获取指定 session 的 metadata, 消息数量和消息列表 (部分字段)"""
         metadata = self._get_latest_metadata_for_session(session_id)

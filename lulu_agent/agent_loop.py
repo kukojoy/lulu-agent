@@ -3,6 +3,7 @@ import json
 from lulu_agent.config import config
 from lulu_agent.context_manager import ContextManager
 from lulu_agent.llm_client import LLMClient
+from lulu_agent.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 
 
@@ -20,13 +21,17 @@ class AgentLoop:
         llm_client: LLMClient | None = None,
         tool_registry: ToolRegistry | None = None,
         context_manager: ContextManager | None = None,
+        session_store: SessionStore | None = None,
+        session_id: str | None = None,
         max_turns: int = 10,
     ):
         self.llm_client = llm_client or LLMClient(config)
         self.tool_registry = tool_registry or create_tool_registry()
         self.context_manager = context_manager or ContextManager()
+        self.session_store = session_store
+        self.session_id = session_id
         self.max_turns = max_turns
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = self._load_or_initialize_messages()
 
     def run(self, user_input: str) -> str:
         self._append_user_message(user_input)
@@ -46,15 +51,34 @@ class AgentLoop:
                 return message.content or ""
 
             for tool_call in tool_calls:
-                self.messages.append(self._handle_tool_call(tool_call))
+                self._append_tool_message(self._handle_tool_call(tool_call))
 
         return "Reached max turns before completing the task."
 
     def _append_user_message(self, content: str) -> None:
-        self.messages.append({"role": "user", "content": content})
+        self._append_message({"role": "user", "content": content})
 
     def _append_assistant_message(self, message) -> None:
-        self.messages.append(self._assistant_message_to_dict(message))
+        self._append_message(self._assistant_message_to_dict(message))
+
+    def _append_tool_message(self, message: dict) -> None:
+        self._append_message(message)
+
+    def _append_message(self, message: dict) -> None:
+        self.messages.append(message)
+        if self.session_store and self.session_id:
+            self.session_store.append_message(self.session_id, message)
+
+    def _load_or_initialize_messages(self) -> list[dict]:
+        if self.session_store and self.session_id:
+            messages = self.session_store.load_messages(self.session_id)
+            if messages:
+                return messages
+
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if self.session_store and self.session_id:
+            self.session_store.append_message(self.session_id, messages[0])
+        return messages
 
     def _handle_tool_call(self, tool_call) -> dict:
         tool_name = tool_call.function.name

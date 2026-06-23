@@ -10,7 +10,8 @@ easy to read and extend.
 
 - Runs from a local CLI.
 - Calls an OpenAI-compatible chat completion endpoint.
-- Maintains in-memory conversation history during one CLI session.
+- Persists CLI session transcripts under `.lulu/sessions`.
+- Supports creating, resuming, listing, and inspecting local sessions.
 - Sends a bounded context window to the model through `ContextManager`.
 - Supports OpenAI-compatible tool calls.
 - Returns structured tool results through `ToolResult`.
@@ -62,6 +63,42 @@ or:
 
 The CLI enables basic line editing through Python `readline` when available,
 so normal terminal editing keys should work in supported environments.
+
+## Sessions
+
+By default, each CLI run creates a new persistent session under:
+
+```text
+.lulu/sessions/
+```
+
+The CLI prints the session id at startup:
+
+```text
+Session id: session-YYYYMMDD-HHMMSS-XXXXXXXX
+```
+
+Resume a previous session:
+
+```bash
+python -m lulu_agent.main --resume <session_id>
+```
+
+List recent sessions:
+
+```bash
+python -m lulu_agent.main --list-sessions
+```
+
+Inspect one session without printing the full transcript:
+
+```bash
+python -m lulu_agent.main --inspect-session <session_id>
+```
+
+Session transcripts are append-only JSONL files. The index is stored in
+`.lulu/sessions/sessions_index.jsonl`. The `.lulu/` directory is local runtime
+state and should not be committed.
 
 ## Typical Workflow
 
@@ -152,6 +189,7 @@ lulu_agent/
   context_manager.py      # Bounded request context selection
   llm_client.py           # OpenAI-compatible client wrapper
   config.py               # Environment-based config loading and validation
+  session_store.py        # JSONL session persistence
   tools.py                # ToolResult, Tool, ToolRegistry, schema validation
   native_tools/
     list_files.py
@@ -168,6 +206,7 @@ lulu_agent/
   insertion.
 - `ContextManager` owns the request context shape sent to the model.
 - `LLMClient` owns OpenAI-compatible API calls and wraps request failures.
+- `SessionStore` owns JSONL transcript persistence and session metadata.
 - `ToolRegistry` owns tool registration, schemas, basic argument validation,
   and dispatch.
 - Native tools own their domain behavior and return `ToolResult`.
@@ -199,7 +238,7 @@ Included:
 
 - Local CLI.
 - OpenAI-compatible model client.
-- Session-local history.
+- Persistent local sessions and resume.
 - Simple context window bounding.
 - Minimal native coding toolset.
 - Structured tool results.
@@ -208,7 +247,6 @@ Included:
 Not included:
 
 - Persistent memory.
-- Session persistence or resume.
 - LLM-based context compression.
 - Approval system.
 - Sandbox or container execution.
