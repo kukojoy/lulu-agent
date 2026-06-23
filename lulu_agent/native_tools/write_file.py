@@ -1,5 +1,4 @@
-from pathlib import Path
-
+from lulu_agent.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
 
 
@@ -22,7 +21,11 @@ from lulu_agent.tools import ToolResult, tool
     },
 )
 def write_file(args):
-    path = Path(args["path"]).resolve()
+    try:
+        path = validate_workspace_path(args["path"], operation=PATH_OPERATION_WRITE)
+    except PathSafetyError as exc:
+        return ToolResult(ok=False, error=str(exc))
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(args["content"], encoding="utf-8")

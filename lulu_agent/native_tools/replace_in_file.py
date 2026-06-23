@@ -1,5 +1,4 @@
-from pathlib import Path
-
+from lulu_agent.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
 
 
@@ -34,7 +33,11 @@ from lulu_agent.tools import ToolResult, tool
     },
 )
 def replace_in_file(args):
-    path = Path(args["path"]).resolve()
+    try:
+        path = validate_workspace_path(args["path"], operation=PATH_OPERATION_WRITE)
+    except PathSafetyError as exc:
+        return ToolResult(ok=False, error=str(exc))
+
     old_string = args["old_string"]
     new_string = args["new_string"]
     replace_all = args.get("replace_all", False)

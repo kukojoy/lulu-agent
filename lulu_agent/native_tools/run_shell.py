@@ -1,17 +1,12 @@
-import re
 import subprocess
 from pathlib import Path
 
+from lulu_agent.approval import request_cli_approval
+from lulu_agent.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL, classify_shell_command
 from lulu_agent.tools import ToolResult, tool, truncate_text
 
 
 MAX_SHELL_OUTPUT_CHARS = 4000
-DANGEROUS_COMMAND_PATTERNS = [
-    (re.compile(r"\brm\s+.*-[^\s]*r[^\s]*f"), "recursive forced delete"),
-    (re.compile(r"\bsudo\b"), "sudo command"),
-    (re.compile(r">\s*/(?:etc|bin|sbin|usr|var|System|Library)\b"), "redirect to system path"),
-    (re.compile(r"\b(curl|wget)\b.*\|\s*(sh|bash)\b"), "download and execute shell script"),
-]
 
 
 @tool(
@@ -30,11 +25,17 @@ DANGEROUS_COMMAND_PATTERNS = [
 )
 def run_shell(args):
     command = args["command"]
-    danger = detect_dangerous_command(command)
-    if danger:
+    decision = classify_shell_command(command)
+    if decision.decision == SAFETY_DENY:
         return ToolResult(
             ok=False,
-            error=f"Refused to run risky shell command: {danger}",
+            error=f"Refused to run risky shell command: {decision.reason}",
+        )
+
+    if decision.decision == SAFETY_NEEDS_APPROVAL and not request_cli_approval(decision, command):
+        return ToolResult(
+            ok=False,
+            error=f"Shell command requires approval and was denied: {decision.reason}",
         )
 
     result = subprocess.run(
@@ -54,8 +55,5 @@ def run_shell(args):
     )
 
 
-def detect_dangerous_command(command: str) -> str | None:
-    for pattern, description in DANGEROUS_COMMAND_PATTERNS:
-        if pattern.search(command):
-            return description
-    return None
+def detect_dangerous_command(command: str):
+    return classify_shell_command(command)

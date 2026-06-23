@@ -22,7 +22,9 @@ easy to read and extend.
   - `replace_in_file`
   - `run_shell`
 - Handles missing config and LLM request failures with readable CLI errors.
-- Rejects a small set of risky shell commands.
+- Applies a soft workspace safety boundary to file tools.
+- Rejects some risky shell commands and asks for CLI approval for selected
+  file-mutating shell commands.
 - Truncates large shell output before sending it back to the model.
 
 ## Setup
@@ -176,8 +178,11 @@ Key behavior:
 - Returns structured `stdout`, `stderr`, `exit_code`, and `cwd`.
 - Truncates large output.
 - Rejects obvious risky patterns such as recursive forced delete and `sudo`.
+- Asks for one-time CLI approval for selected commands such as `rm`, `mv`,
+  `chmod`, and `chown`.
 - The model is prompted to verify shell-based file operations with `ls`,
   `test`, or `find` when needed.
+- Current safety is a soft workspace boundary, not an OS sandbox.
 
 ## Architecture
 
@@ -263,7 +268,8 @@ Likely extension points:
 - Replace `ContextManager` with token budgeting, summarization, or memory
   injection.
 - Extend `ToolRegistry` to load plugin or MCP tools.
-- Upgrade shell safety from refusal rules to approval and sandbox policies.
+- Upgrade soft workspace safety to policy profiles, audit events, and optional
+  OS sandbox adapters.
 - Add persistent sessions and resume support.
 - Add streaming model responses.
 - Add a richer CLI or TUI.

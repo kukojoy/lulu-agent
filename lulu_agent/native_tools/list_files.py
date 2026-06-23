@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from lulu_agent.safety import PATH_OPERATION_READ, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
 
 
@@ -35,7 +36,11 @@ DEFAULT_MAX_ENTRIES = 100
     },
 )
 def list_files(args):
-    path = Path(args.get("path") or ".").resolve()
+    try:
+        path = validate_workspace_path(args.get("path") or ".", operation=PATH_OPERATION_READ)
+    except PathSafetyError as exc:
+        return ToolResult(ok=False, error=str(exc))
+
     recursive = args.get("recursive", False)
     include_hidden = args.get("include_hidden", False)
     max_entries = args.get("max_entries", DEFAULT_MAX_ENTRIES)

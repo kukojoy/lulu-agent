@@ -1,5 +1,4 @@
-from pathlib import Path
-
+from lulu_agent.safety import PATH_OPERATION_READ, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
 
 
@@ -18,7 +17,11 @@ from lulu_agent.tools import ToolResult, tool
     },
 )
 def read_file(args):
-    path = Path(args["path"]).resolve()
+    try:
+        path = validate_workspace_path(args["path"], operation=PATH_OPERATION_READ)
+    except PathSafetyError as exc:
+        return ToolResult(ok=False, error=str(exc))
+
     if not path.exists():
         return ToolResult(ok=False, error=f"File not found: {path}")
     if not path.is_file():
