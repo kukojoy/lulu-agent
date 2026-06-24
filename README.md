@@ -13,6 +13,7 @@ easy to read and extend.
 - Persists CLI session transcripts under `.lulu/sessions`.
 - Supports creating, resuming, listing, and inspecting local sessions.
 - Sends a bounded context window to the model through `ContextManager`.
+- Supports durable local memory through `MEMORY.md`.
 - Supports OpenAI-compatible tool calls.
 - Returns structured tool results through `ToolResult`.
 - Provides native tools for basic coding workflows:
@@ -21,6 +22,7 @@ easy to read and extend.
   - `write_file`
   - `replace_in_file`
   - `run_shell`
+  - `memory`
 - Handles missing config and LLM request failures with readable CLI errors.
 - Applies a soft workspace safety boundary to file tools.
 - Rejects some risky shell commands and asks for CLI approval for selected
@@ -117,6 +119,8 @@ Example tool responsibilities:
 - Use `write_file` to create or fully overwrite a file.
 - Use `replace_in_file` for small exact text edits.
 - Use `run_shell` to run tests, inspect git state, or verify filesystem state.
+- Use `memory` only when the user explicitly asks to remember, forget, or
+  update durable preferences, facts, or project conventions.
 
 ## Native Tools
 
@@ -184,6 +188,22 @@ Key behavior:
   `test`, or `find` when needed.
 - Current safety is a soft workspace boundary, not an OS sandbox.
 
+### `memory`
+
+Reads or updates durable local memory stored in `MEMORY.md`.
+
+Key behavior:
+
+- `MEMORY.md` is read before each model call and injected as a context block.
+- The injected memory block is not written to raw session transcripts.
+- Supports `read`, `add`, `replace`, and `remove` actions.
+- `replace` and `remove` identify the target entry with a unique `old_text`
+  substring and operate on the entire matching entry.
+- Memory writes should only happen when the user explicitly asks the agent to
+  remember, forget, or update durable information.
+- Does not perform automatic summarization, embedding search, background
+  review, or external provider sync.
+
 ## Architecture
 
 ```text
@@ -195,9 +215,11 @@ lulu_agent/
   llm_client.py           # OpenAI-compatible client wrapper
   config.py               # Environment-based config loading and validation
   session_store.py        # JSONL session persistence
+  memory_store.py         # Local MEMORY.md persistence and snapshots
   tools.py                # ToolResult, Tool, ToolRegistry, schema validation
   native_tools/
     list_files.py
+    memory.py
     read_file.py
     write_file.py
     replace_in_file.py
@@ -210,6 +232,7 @@ lulu_agent/
 - `AgentLoop` owns message ordering, model calls, tool dispatch, and tool result
   insertion.
 - `ContextManager` owns the request context shape sent to the model.
+- `MemoryStore` owns local `MEMORY.md` persistence and snapshot construction.
 - `LLMClient` owns OpenAI-compatible API calls and wraps request failures.
 - `SessionStore` owns JSONL transcript persistence and session metadata.
 - `ToolRegistry` owns tool registration, schemas, basic argument validation,
@@ -244,6 +267,7 @@ Included:
 - Local CLI.
 - OpenAI-compatible model client.
 - Persistent local sessions and resume.
+- Durable local memory through `MEMORY.md`.
 - Simple context window bounding.
 - Minimal native coding toolset.
 - Structured tool results.
@@ -251,10 +275,7 @@ Included:
 
 Not included:
 
-- Persistent memory.
 - LLM-based context compression.
-- Approval system.
-- Sandbox or container execution.
 - MCP, plugins, skills, or subagents.
 - Multi-provider routing.
 - Streaming output.
@@ -267,6 +288,8 @@ Likely extension points:
 
 - Replace `ContextManager` with token budgeting, summarization, or memory
   injection.
+- Extend memory from single-file `MEMORY.md` to reviewed, searchable, or
+  provider-backed memory.
 - Extend `ToolRegistry` to load plugin or MCP tools.
 - Upgrade soft workspace safety to policy profiles, audit events, and optional
   OS sandbox adapters.

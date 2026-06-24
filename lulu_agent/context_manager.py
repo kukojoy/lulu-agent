@@ -13,24 +13,39 @@ ContextManager 执行逻辑
 
 from html import escape
 
+from lulu_agent.memory_store import MemoryStore
+
 
 class ContextManager:
     def __init__(
         self,
         max_messages: int = 40,
         context_blocks: list[dict] | None = None,
+        memory_store: MemoryStore | None = None,
     ):
         if max_messages < 1:
             raise ValueError("max_messages must be at least 1")
         self.max_messages = max_messages
         self.context_blocks = list(context_blocks or [])
+        self.memory_store = memory_store or MemoryStore()
 
-    def prepare_messages(self, messages: list[dict]) -> list[dict]:
-        return self._build_api_messages(messages)
+    def prepare_messages(
+        self,
+        messages: list[dict],
+        context_blocks: list[dict] | None = None,
+    ) -> list[dict]:
+        return self._build_api_messages(messages, context_blocks=context_blocks)
 
-    def _build_api_messages(self, messages: list[dict]) -> list[dict]:
+    def _build_api_messages(
+        self,
+        messages: list[dict],
+        context_blocks: list[dict] | None = None,
+    ) -> list[dict]:
         system_message = self._first_system_message(messages)
-        system_message = self._merge_context_blocks_into_system_message(system_message)
+        system_message = self._merge_context_blocks_into_system_message(
+            system_message,
+            context_blocks=context_blocks,
+        )
         non_system_messages = self._non_system_messages(messages)
         selected = self._recent_messages(non_system_messages)
 
@@ -63,13 +78,14 @@ class ContextManager:
     def _merge_context_blocks_into_system_message(
         self,
         system_message: dict | None,
+        context_blocks: list[dict] | None = None,
     ) -> dict | None:
         """将 context blocks 临时合并进 system msg
         
         Returns:
             dict | None: 合并后的 system msg, if not system msg and not context blocks, return None
         """
-        rendered_context = self._render_context_blocks()
+        rendered_context = self._render_context_blocks(context_blocks)
         if not rendered_context:
             return system_message
 
@@ -84,10 +100,11 @@ class ContextManager:
             merged["content"] = rendered_context
         return merged
 
-    def _render_context_blocks(self) -> str | None:
+    def _render_context_blocks(self, context_blocks: list[dict] | None = None) -> str | None:
         """将 context blocks 渲染成可合并到 system msg 的文本"""
+        blocks = [*self.context_blocks, *self._memory_context_blocks(), *(context_blocks or [])]
         rendered_blocks = []
-        for block in self.context_blocks:
+        for block in blocks:
             rendered = self._render_context_block(block)
             if rendered:
                 rendered_blocks.append(rendered)
@@ -102,6 +119,12 @@ class ContextManager:
                 "</context_blocks>",
             ]
         )
+
+    def _memory_context_blocks(self) -> list[dict]:
+        """从 memory store 读取 memory context block"""
+        snapshot = self.memory_store.read_snapshot()
+        block = snapshot.to_context_block()
+        return [block] if block else []
 
     def _render_context_block(self, block: dict) -> str | None:
         """渲染单个 context block

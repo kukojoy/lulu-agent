@@ -10,6 +10,7 @@ from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 SYSTEM_PROMPT = """You are a local coding agent.
 You can use tools to inspect files, write files, and run shell commands.
 Use tools when needed.
+You have a memory tool for durable long-term memory. Only write memory when the user explicitly asks you to remember, forget, or update durable preferences, facts, or project conventions. Do not store temporary task state, full chat logs, sensitive information, or unconfirmed guesses.
 Do not claim a command succeeded unless you saw the result.
 For shell-based file operations, do not rely only on exit code. Check cwd and verify the target state with ls/test/find when needed.
 When the task is complete, answer clearly and briefly."""
@@ -21,13 +22,14 @@ class AgentLoop:
         llm_client: LLMClient | None = None,
         tool_registry: ToolRegistry | None = None,
         context_manager: ContextManager | None = None,
+        memory_store=None,
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         max_turns: int = 10,
     ):
         self.llm_client = llm_client or LLMClient(config)
         self.tool_registry = tool_registry or create_tool_registry()
-        self.context_manager = context_manager or ContextManager()
+        self.context_manager = context_manager or ContextManager(memory_store=memory_store)
         self.session_store = session_store
         self.session_id = session_id
         self.max_turns = max_turns
