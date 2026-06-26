@@ -14,6 +14,7 @@ ContextManager 执行逻辑
 from html import escape
 
 from lulu_agent.memory_store import MemoryStore
+from lulu_agent.skill_loader import SkillLoader
 
 
 class ContextManager:
@@ -22,12 +23,14 @@ class ContextManager:
         max_messages: int = 40,
         context_blocks: list[dict] | None = None,
         memory_store: MemoryStore | None = None,
+        skill_loader: SkillLoader | None = None,
     ):
         if max_messages < 1:
             raise ValueError("max_messages must be at least 1")
         self.max_messages = max_messages
         self.context_blocks = list(context_blocks or [])
         self.memory_store = memory_store or MemoryStore()
+        self.skill_loader = skill_loader or SkillLoader()
 
     def prepare_messages(
         self,
@@ -102,7 +105,12 @@ class ContextManager:
 
     def _render_context_blocks(self, context_blocks: list[dict] | None = None) -> str | None:
         """将 context blocks 渲染成可合并到 system msg 的文本"""
-        blocks = [*self.context_blocks, *self._memory_context_blocks(), *(context_blocks or [])]
+        blocks = [
+            *self.context_blocks,
+            *self._memory_context_blocks(),
+            *self._skill_context_blocks(),
+            *(context_blocks or []),
+        ]
         rendered_blocks = []
         for block in blocks:
             rendered = self._render_context_block(block)
@@ -125,6 +133,32 @@ class ContextManager:
         snapshot = self.memory_store.read_snapshot()
         block = snapshot.to_context_block()
         return [block] if block else []
+
+    def _skill_context_blocks(self) -> list[dict]:
+        """从 skill loader 读取 skill metadata context block"""
+        result = self.skill_loader.list_skills()
+        if not result.skills and not result.errors:
+            return []
+
+        lines = []
+        if result.skills:
+            lines.append("Local workspace skills available in .lulu/skills:")
+        for skill in result.skills:
+            lines.append(f"- {skill.name}: {skill.description} ({skill.path})")
+
+        if result.errors:
+            if lines:
+                lines.append("")
+            lines.append("Skill load errors:")
+            for error in result.errors:
+                lines.append(f"- {error.path}: {error.error}")
+
+        return [
+            {
+                "name": "skills",
+                "content": "\n".join(lines),
+            }
+        ]
 
     def _render_context_block(self, block: dict) -> str | None:
         """渲染单个 context block

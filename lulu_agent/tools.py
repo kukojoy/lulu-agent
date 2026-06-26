@@ -170,6 +170,7 @@ def create_tool_registry() -> ToolRegistry:
     from lulu_agent.native_tools.read_file import read_file
     from lulu_agent.native_tools.replace_in_file import replace_in_file
     from lulu_agent.native_tools.run_shell import run_shell
+    from lulu_agent.native_tools.skill import skill
     from lulu_agent.native_tools.write_file import write_file
 
     registry = ToolRegistry()
@@ -179,4 +180,5 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(list_files)
     registry.register(replace_in_file)
     registry.register(memory)
+    registry.register(skill)
     return registry
