@@ -181,4 +181,10 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(replace_in_file)
     registry.register(memory)
     registry.register(skill)
+    try:
+        from lulu_agent.mcp_registry import register_mcp_tools
+
+        register_mcp_tools(registry)
+    except Exception:
+        pass
     return registry
