@@ -1,4 +1,4 @@
-from lulu_agent.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
+from lulu_agent.runtime.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
 
 

@@ -16,7 +16,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from lulu_agent.mcp_config import MCPServerConfig
+from lulu_agent.mcp.config import MCPServerConfig
 
 
 try:

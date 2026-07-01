@@ -1,4 +1,4 @@
-from lulu_agent.memory_store import MemoryStore
+from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.tools import ToolResult, tool
 
 

@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from lulu_agent.mcp_client import MCPClient
+from lulu_agent.mcp.client import MCPClient
 from lulu_agent.tools import Tool, ToolResult
 
 

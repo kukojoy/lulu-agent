@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from lulu_agent.skill_loader import SkillLoader, SkillLoaderError
+from lulu_agent.skills.loader import SkillLoader, SkillLoaderError
 from lulu_agent.tools import ToolResult, tool
 
 

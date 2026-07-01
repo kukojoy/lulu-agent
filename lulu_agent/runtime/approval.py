@@ -1,5 +1,5 @@
-from lulu_agent.safety import SafetyDecision
-from lulu_agent.cli_input import read_user_input
+from lulu_agent.runtime.safety import SafetyDecision
+from lulu_agent.runtime.cli_input import read_user_input
 
 def request_cli_approval(decision: SafetyDecision, command: str) -> bool:
     """请求用户在 CLI 中批准操作

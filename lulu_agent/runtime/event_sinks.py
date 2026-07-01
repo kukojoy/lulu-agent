@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from lulu_agent.events import RuntimeEvent
-from lulu_agent.events import (
+from lulu_agent.runtime.events import RuntimeEvent
+from lulu_agent.runtime.events import (
     EVENT_USER_MESSAGE,
     EVENT_ASSISTANT_DELTA,
     EVENT_TOOL_CALL,

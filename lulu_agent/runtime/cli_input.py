@@ -1,3 +1,4 @@
+"""优化命令行行编辑功能"""
 def setup_line_editing() -> None:
     try:
         import readline

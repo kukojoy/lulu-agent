@@ -1,16 +1,16 @@
 """MCP 工具注册器
 
 向工具层提供接口: register_mcp_tools, 内部流程:
-1. [mcp_config.py]   load_mcp_config(config_path) -> MCPConfigLoadResult -> servers (List[MCPServerConfig])
-2. [mcp_client.py]   for server in servers: MCPClient.list_tools() -> MCPClientResult -> tool_infos
-3. [mcp_adapter.py]  build_mcp_tools(tool_infos) -> MCPToolAdapterResult -> tools
-4. [mcp_registry.py] for tool in tools: tools.register(tool)
+1. [mcp/config.py]   load_mcp_config(config_path) -> MCPConfigLoadResult -> servers (List[MCPServerConfig])
+2. [mcp/client.py]   for server in servers: MCPClient.list_tools() -> MCPClientResult -> tool_infos
+3. [mcp/adapter.py]  build_mcp_tools(tool_infos) -> MCPToolAdapterResult -> tools
+4. [mcp/registry.py] for tool in tools: tools.register(tool)
 """
 from dataclasses import dataclass
 
-from lulu_agent.mcp_config import DEFAULT_MCP_CONFIG_PATH, load_mcp_config
-from lulu_agent.mcp_client import MCPClient
-from lulu_agent.mcp_adapter import MCPToolAdapterError, build_mcp_tools
+from lulu_agent.mcp.config import DEFAULT_MCP_CONFIG_PATH, load_mcp_config
+from lulu_agent.mcp.client import MCPClient
+from lulu_agent.mcp.adapter import MCPToolAdapterError, build_mcp_tools
 
 from lulu_agent.tools import ToolRegistry
 

@@ -13,8 +13,8 @@ ContextManager 执行逻辑
 
 from html import escape
 
-from lulu_agent.memory_store import MemoryStore
-from lulu_agent.skill_loader import SkillLoader
+from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.skills.loader import SkillLoader
 
 
 class ContextManager:

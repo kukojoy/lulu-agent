@@ -165,13 +165,13 @@ def _json_type_name(value: Any) -> str:
 
 
 def create_tool_registry() -> ToolRegistry:
-    from lulu_agent.native_tools.list_files import list_files
-    from lulu_agent.native_tools.memory import memory
-    from lulu_agent.native_tools.read_file import read_file
-    from lulu_agent.native_tools.replace_in_file import replace_in_file
-    from lulu_agent.native_tools.run_shell import run_shell
-    from lulu_agent.native_tools.skill import skill
-    from lulu_agent.native_tools.write_file import write_file
+    from lulu_agent.tools.native.list_files import list_files
+    from lulu_agent.tools.native.memory import memory
+    from lulu_agent.tools.native.read_file import read_file
+    from lulu_agent.tools.native.replace_in_file import replace_in_file
+    from lulu_agent.tools.native.run_shell import run_shell
+    from lulu_agent.tools.native.skill import skill
+    from lulu_agent.tools.native.write_file import write_file
 
     registry = ToolRegistry()
     registry.register(read_file)
@@ -182,7 +182,7 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(memory)
     registry.register(skill)
     try:
-        from lulu_agent.mcp_registry import register_mcp_tools
+        from lulu_agent.mcp.registry import register_mcp_tools
 
         register_mcp_tools(registry)
     except Exception:

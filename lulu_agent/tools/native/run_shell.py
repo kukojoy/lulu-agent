@@ -1,8 +1,8 @@
 import subprocess
 from pathlib import Path
 
-from lulu_agent.approval import request_cli_approval
-from lulu_agent.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL, classify_shell_command
+from lulu_agent.runtime.approval import request_cli_approval
+from lulu_agent.runtime.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL, classify_shell_command
 from lulu_agent.tools import ToolResult, tool, truncate_text
 
 
