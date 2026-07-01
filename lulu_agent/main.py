@@ -5,6 +5,7 @@ from lulu_agent.agent_loop import AgentLoop
 from lulu_agent.cli_input import read_user_input, setup_line_editing
 from lulu_agent.config import ConfigError
 from lulu_agent.llm_client import LLMClientError
+from lulu_agent.event_sinks import CliEventSink
 from lulu_agent.session_store import SessionStore, SessionStoreError
 
 
@@ -40,7 +41,11 @@ def create_agent(
         metadata = store.create_session(cwd=Path.cwd())
         session_id = metadata["session_id"]
 
-    return AgentLoop(session_store=store, session_id=session_id), session_id
+    return AgentLoop(
+        session_store=store,
+        session_id=session_id,
+        event_sink=CliEventSink(),
+    ), session_id
 
 
 def format_sessions(sessions: list[dict]) -> str:
@@ -110,7 +115,6 @@ def main(argv: list[str] | None = None):
     while True:
         try:
             user_input = read_user_input("\nlulu-agent> ").strip()
-            print('[user query:]', user_input)
         except EOFError:
             print('[EOFError] bye')
             break
@@ -126,7 +130,6 @@ def main(argv: list[str] | None = None):
         except LLMClientError as exc:
             print(f"LLM error: {exc}")
             continue
-        print('[agent response:]', response)
 
 
 if __name__ == "__main__":
