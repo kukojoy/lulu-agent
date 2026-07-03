@@ -27,6 +27,7 @@ class LLMClient:
         kwargs = {
             "model": self.model,
             "messages": messages,
+            "stream_options": {"include_usage": False}
         }
         if stream:
             kwargs["stream"] = True
