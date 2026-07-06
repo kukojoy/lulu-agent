@@ -263,7 +263,7 @@ def _to_plain_data(value: Any) -> Any:
         return {str(key): _to_plain_data(item) for key, item in value.items()}
 
     if hasattr(value, "model_dump"):
-        print(f"DEBUG: _to_plain_data: value={value}, type(value)={type(value)}")
+        # print(f"DEBUG: _to_plain_data: value={value}, type(value)={type(value)}")
         return _to_plain_data(value.model_dump())
 
     if hasattr(value, "dict"):

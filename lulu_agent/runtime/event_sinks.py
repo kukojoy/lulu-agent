@@ -39,7 +39,7 @@ class CliEventSink:
     COLOR_RESET = "\033[0m"
 
     def __init__(self):
-        self._streaming_turns: set[str] = set()
+        self._is_streaming = False
 
     def emit(self, event: RuntimeEvent) -> None:
         if event.type == EVENT_USER_MESSAGE:
@@ -50,13 +50,13 @@ class CliEventSink:
                 )
             )
         elif event.type == EVENT_ASSISTANT_DELTA:
-            if event.turn_id not in self._streaming_turns:
+            if not self._is_streaming:
                 print(
                     self._color(self.COLOR_GREEN, "[agent response:]"),
                     end=" ",
                     flush=True,
                 )
-                self._streaming_turns.add(event.turn_id)
+                self._is_streaming = True
             print(
                 self._color(self.COLOR_GREEN, event.payload.get("delta", "")),
                 end="",
@@ -79,10 +79,10 @@ class CliEventSink:
                     f"error={event.payload.get('error')}",
                 )
             )
-        elif event.type == EVENT_ASSISTANT_MESSAGE and event.payload.get("final"):
+        elif event.type == EVENT_ASSISTANT_MESSAGE:
             if event.payload.get("streamed"):
-                print()
-            else:
+                self._finish_streaming()
+            elif event.payload.get("content"):
                 print(
                     self._color(
                         self.COLOR_GREEN,
@@ -90,6 +90,7 @@ class CliEventSink:
                     )
                 )
         elif event.type == EVENT_ERROR:
+            self._finish_streaming()
             print(
                 self._color(
                     self.COLOR_RED,
@@ -99,6 +100,11 @@ class CliEventSink:
 
     def _color(self, color: str, text: str) -> str:
         return f"{color}{text}{self.COLOR_RESET}"
+
+    def _finish_streaming(self) -> None:
+        if self._is_streaming:
+            print()
+            self._is_streaming = False
 
 
 def new_turn_id() -> str:
