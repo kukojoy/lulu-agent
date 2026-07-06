@@ -71,6 +71,7 @@ def format_session_inspection(summary: dict) -> str:
         f"Cwd: {metadata.get('cwd')}",
         f"Title: {metadata.get('title') or '(untitled)'}",
         f"Messages: {summary['message_count']}",
+        f"Turns: {summary.get('turn_count', 0)}",
         "Transcript summary:",
     ]
     for index, message in enumerate(summary["messages"], start=1):
@@ -79,7 +80,20 @@ def format_session_inspection(summary: dict) -> str:
             detail = f"{detail} [tool_calls]".strip()
         if message.get("tool_call_id"):
             detail = f"{detail} [tool_call_id={message['tool_call_id']}]".strip()
+        if message.get("turn_id"):
+            detail = f"{detail} [turn_id={message['turn_id']}]".strip()
         lines.append(f"{index}. {message.get('role')}: {detail}")
+    if summary.get("turns"):
+        lines.append("Turn summary:")
+        for index, turn in enumerate(summary["turns"], start=1):
+            detail = (
+                f"{turn.get('status')} / {turn.get('exit_reason')} "
+                f"model_calls={turn.get('model_calls', 0)} "
+                f"tool_calls={turn.get('tool_calls', 0)}"
+            )
+            if turn.get("error"):
+                detail = f"{detail} error={turn['error']}"
+            lines.append(f"{index}. {turn.get('turn_id')}: {detail}")
     return "\n".join(lines)
 
 
@@ -118,6 +132,9 @@ def main(argv: list[str] | None = None):
         except EOFError:
             print('[EOFError] bye')
             break
+        except KeyboardInterrupt:
+            print()
+            break
         
         if not user_input:
             continue
@@ -133,4 +150,7 @@ def main(argv: list[str] | None = None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()

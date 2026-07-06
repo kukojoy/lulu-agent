@@ -8,6 +8,7 @@ from uuid import uuid4
 DEFAULT_SESSIONS_DIR = Path(".lulu") / "sessions"
 SESSION_INDEX_FILENAME = "sessions_index.jsonl"
 TITLE_MAX_CHARS = 60
+TURN_SUMMARY_MAX_RESPONSE_CHARS = 240
 
 
 class SessionStoreError(RuntimeError):
@@ -40,7 +41,12 @@ class SessionStore:
         self.append_index(metadata)
         return metadata
 
-    def append_message(self, session_id: str, message: dict[str, Any]) -> dict[str, Any]:
+    def append_message(
+        self,
+        session_id: str,
+        message: dict[str, Any],
+        turn_id: str | None = None,
+    ) -> dict[str, Any]:
         """向指定 session 追加一条消息, 并更新 session metadata
         
         Returns:
@@ -58,6 +64,8 @@ class SessionStore:
             "created_at": now.isoformat(),
             "message": message,
         }
+        if turn_id:
+            record["turn_id"] = turn_id
 
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False))
@@ -90,9 +98,7 @@ class SessionStore:
                 continue
             record = _parse_jsonl_record(path, line_number, line)
             if record.get("type") != "message":
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: expected type 'message'."
-                )
+                continue
             if record.get("session_id") != session_id:
                 raise SessionStoreError(
                     f"Invalid session record at {path}:{line_number}: session_id mismatch."
@@ -102,8 +108,62 @@ class SessionStore:
                 raise SessionStoreError(
                     f"Invalid session record at {path}:{line_number}: message must be an object."
                 )
+            turn_id = record.get("turn_id")
+            if turn_id is not None:
+                if not isinstance(turn_id, str) or not turn_id:
+                    raise SessionStoreError(
+                        f"Invalid session record at {path}:{line_number}: turn_id must be a non-empty string."
+                    )
+                message = dict(message)
+                message["turn_id"] = turn_id
             messages.append(message)
         return messages
+
+    def append_turn(self, session_id: str, turn: dict[str, Any]) -> dict[str, Any]:
+        """向指定 session 追加一条 turn 摘要, 并更新 session metadata"""
+        self._ensure_root()
+        path = self._existing_session_path(session_id)
+        now = _utc_now()
+        metadata = self._get_latest_metadata_for_session(session_id)
+        metadata["updated_at"] = now.isoformat()
+
+        summary = _summarize_turn(turn)
+        record = {
+            "type": "turn",
+            "session_id": session_id,
+            "created_at": now.isoformat(),
+            "turn": summary,
+        }
+
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False))
+            file.write("\n")
+            file.flush()
+
+        self.append_index(metadata)
+        return metadata
+
+    def load_turns(self, session_id: str) -> list[dict[str, Any]]:
+        """加载指定 session 的所有 turn 摘要"""
+        path = self._existing_session_path(session_id)
+        turns: list[dict[str, Any]] = []
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            record = _parse_jsonl_record(path, line_number, line)
+            if record.get("type") != "turn":
+                continue
+            if record.get("session_id") != session_id:
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
+                )
+            turn = record.get("turn")
+            if not isinstance(turn, dict):
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: turn must be an object."
+                )
+            turns.append(turn)
+        return turns
 
     def list_sessions(self, limit: int | None = None) -> list[dict[str, Any]]:
         """列出所有 session 的最新 metadata, 按 updated_at 降序排列
@@ -124,26 +184,31 @@ class SessionStore:
         return sessions[:limit]
 
     def validate_session(self, session_id: str) -> None:
-        """验证指定 session 是否存在, 是否能正常加载 metadata 和消息"""
+        """验证指定 session 是否存在, 是否能正常加载 metadata, 消息和 turns"""
         self._get_latest_metadata_for_session(session_id)
         self.load_messages(session_id)
+        self.load_turns(session_id)
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         """获取指定 session 的 metadata, 消息数量和消息列表 (部分字段)"""
         metadata = self._get_latest_metadata_for_session(session_id)
         messages = self.load_messages(session_id)
+        turns = self.load_turns(session_id)
         return {
             "metadata": metadata,
             "message_count": len(messages),
+            "turn_count": len(turns),
             "messages": [
                 {
                     "role": message.get("role"),
                     "content": _summarize_content(message.get("content")),
                     "has_tool_calls": bool(message.get("tool_calls")),
                     "tool_call_id": message.get("tool_call_id"),
+                    "turn_id": message.get("turn_id"),
                 }
                 for message in messages
             ],
+            "turns": turns[-10:],
         }
 
     def _metadata_for_append(
@@ -272,3 +337,18 @@ def _summarize_content(content: Any, max_chars: int = 120) -> str:
         return ""
     collapsed = " ".join(content.split())
     return collapsed[:max_chars]
+
+
+def _summarize_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "turn_id": turn.get("turn_id"),
+        "status": turn.get("status"),
+        "exit_reason": turn.get("exit_reason"),
+        "error": turn.get("error"),
+        "model_calls": int(turn.get("model_calls") or 0),
+        "tool_calls": int(turn.get("tool_calls") or 0),
+        "final_response": _summarize_content(
+            turn.get("final_response"),
+            TURN_SUMMARY_MAX_RESPONSE_CHARS,
+        ),
+    }

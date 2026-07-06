@@ -14,6 +14,7 @@ ContextManager 执行逻辑
 from html import escape
 
 from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.loader import SkillLoader
 
 
@@ -24,6 +25,8 @@ class ContextManager:
         context_blocks: list[dict] | None = None,
         memory_store: MemoryStore | None = None,
         skill_loader: SkillLoader | None = None,
+        session_store: SessionStore | None = None,
+        session_id: str | None = None,
     ):
         if max_messages < 1:
             raise ValueError("max_messages must be at least 1")
@@ -31,6 +34,8 @@ class ContextManager:
         self.context_blocks = list(context_blocks or [])
         self.memory_store = memory_store or MemoryStore()
         self.skill_loader = skill_loader or SkillLoader()
+        self.session_store = session_store
+        self.session_id = session_id
 
     def prepare_messages(
         self,
@@ -109,6 +114,7 @@ class ContextManager:
             *self.context_blocks,
             *self._memory_context_blocks(),
             *self._skill_context_blocks(),
+            *self._turn_context_blocks(),
             *(context_blocks or []),
         ]
         rendered_blocks = []
@@ -157,6 +163,41 @@ class ContextManager:
             {
                 "name": "skills",
                 "content": "\n".join(lines),
+            }
+        ]
+
+    def _turn_context_blocks(self) -> list[dict]:
+        """从 session turns 读取上一轮异常结束状态, 生成 runtime context block"""
+        if not self.session_store or not self.session_id:
+            return []
+
+        turns = self.session_store.load_turns(self.session_id)
+        if not turns:
+            return []
+
+        latest = turns[-1]
+        status = latest.get("status")
+        if status not in {"interrupted", "failed"}:
+            return []
+
+        exit_reason = latest.get("exit_reason") or "unknown_error"
+        error = latest.get("error") or ""
+        content = "\n".join(
+            [
+                "The previous agent turn ended abnormally.",
+                f"status: {status}",
+                f"exit_reason: {exit_reason}",
+                f"model_calls: {latest.get('model_calls', 0)}",
+                f"tool_calls: {latest.get('tool_calls', 0)}",
+                f"error: {error}" if error else "error: none",
+                "",
+                "Do not assume the previous turn completed successfully. If the previous turn may have changed files, run commands, or used tools, inspect the relevant state before continuing.",
+            ]
+        )
+        return [
+            {
+                "name": "previous_turn_status",
+                "content": content,
             }
         ]
 

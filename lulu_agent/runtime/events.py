@@ -109,6 +109,10 @@ class ErrorPayload:
 @dataclass(frozen=True)
 class TurnEndPayload:
     status: str
+    exit_reason: str
+    error: str | None = None
+    model_calls: int = 0
+    tool_calls: int = 0
 
 
 RuntimeEventPayload = (
