@@ -5,8 +5,9 @@ from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.runtime.cli_input import read_user_input, setup_line_editing
 from lulu_agent.config import ConfigError
 from lulu_agent.llm.client import LLMClientError
-from lulu_agent.runtime.event_sinks import CliEventSink
+from lulu_agent.runtime.event_sinks import CliEventSink, CompositeEventSink, PersistentEventSink
 from lulu_agent.storage.session_store import SessionStore, SessionStoreError
+from lulu_agent.storage.trace_store import TraceStore
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,7 +45,12 @@ def create_agent(
     return AgentLoop(
         session_store=store,
         session_id=session_id,
-        event_sink=CliEventSink(),
+        event_sink=CompositeEventSink(
+            [
+                CliEventSink(),
+                PersistentEventSink(TraceStore(), session_id),
+            ]
+        ),
     ), session_id
 
 

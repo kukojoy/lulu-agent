@@ -17,12 +17,12 @@ class EventSink:
         pass
 
 
-class NoopEventSink:
+class NoopEventSink(EventSink):
     def emit(self, event: RuntimeEvent) -> None:
         return None
 
 
-class RecordingEventSink:
+class RecordingEventSink(EventSink):
     def __init__(self):
         self.events: list[RuntimeEvent] = []
 
@@ -30,7 +30,31 @@ class RecordingEventSink:
         self.events.append(event)
 
 
-class CliEventSink:
+class CompositeEventSink(EventSink):
+    def __init__(self, sinks: list[EventSink] | None = None):
+        if not sinks:
+            self.sinks = [NoopEventSink()]
+        else:
+            self.sinks = sinks
+
+    def emit(self, event: RuntimeEvent) -> None:
+        for sink in self.sinks:
+            try:
+                sink.emit(event)
+            except Exception:
+                continue
+
+
+class PersistentEventSink(EventSink):
+    def __init__(self, store, session_id: str):
+        self.store = store
+        self.session_id = session_id
+
+    def emit(self, event: RuntimeEvent) -> None:
+        self.store.append_event(self.session_id, event)
+
+
+class CliEventSink(EventSink):
     COLOR_CYAN = "\033[36m"
     COLOR_GREEN = "\033[32m"
     COLOR_YELLOW = "\033[33m"

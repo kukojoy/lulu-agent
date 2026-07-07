@@ -14,9 +14,10 @@ from lulu_agent.runtime.events import (
     EVENT_TURN_END,
     EVENT_TURN_START,
     EVENT_USER_MESSAGE,
+    EventPayloadBuilder,
     RuntimeEvent,
 )
-from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
+from lulu_agent.runtime.event_sinks import EventSink, CompositeEventSink, new_turn_id
 from lulu_agent.runtime.turn import TurnRuntime
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
@@ -56,20 +57,28 @@ class AgentLoop:
             session_store=session_store,
             session_id=session_id,
         )
-        self.event_sink = event_sink or NoopEventSink()
+        self.event_sink = event_sink or CompositeEventSink()
         self.max_turns = max_turns
         self.messages = self._load_or_initialize_messages()
+        self.current_turn: TurnRuntime | None = None
 
     def run(self, user_input: str) -> str:
-        turn_id = new_turn_id()
-        turn = TurnRuntime(turn_id=turn_id)
+        self.current_turn = TurnRuntime(turn_id=new_turn_id())
 
         # === event emit ===
-        self._emit(EVENT_TURN_START, turn_id)
-        self._emit(EVENT_USER_MESSAGE, turn_id, content=user_input)
+        self._emit(
+            EVENT_TURN_START, 
+            self.current_turn.turn_id, 
+            EventPayloadBuilder.build_turn_start_payload()
+        )
+        self._emit(
+            EVENT_USER_MESSAGE,
+            self.current_turn.turn_id,
+            EventPayloadBuilder.build_user_message_payload(user_input),
+        )
         # === event emit ===
-        
-        self._append_user_message(user_input, turn.turn_id)
+
+        self._append_user_message(user_input)
 
         try:
             for _ in range(self.max_turns):
@@ -77,74 +86,89 @@ class AgentLoop:
                 tool_schemas = self.tool_registry.schemas()
 
                 # === event emit and turn state update ===
-                turn.start_model_request()
+                self.current_turn.start_model_request()
                 self._emit(
                     EVENT_MODEL_REQUEST,
-                    turn_id,
-                    message_count=len(request_messages),
-                    tool_count=len(tool_schemas),
+                    self.current_turn.turn_id,
+                    EventPayloadBuilder.build_model_request_payload(
+                        model=getattr(self.llm_client, "model", ""),
+                        stream=hasattr(self.llm_client, "stream_chat"),
+                        request_index=self.current_turn.model_calls,
+                        messages=request_messages,
+                        tools=tool_schemas,
+                    ),
                 )
                 # === event emit and turn state update ===
 
-                message, streamed = self._request_assistant_message(
-                    request_messages,
-                    tool_schemas,
-                    turn,
-                )
+                message, streamed = self._request_assistant_message(request_messages, tool_schemas)
                 tool_calls = message.tool_calls or []
 
-                self._append_assistant_message(message, turn.turn_id)
+                self._append_assistant_message(message)
 
                 # === event emit ===
                 self._emit(
                     EVENT_ASSISTANT_MESSAGE,
-                    turn_id,
-                    content=message.content or "",
-                    tool_call_count=len(tool_calls),
-                    final=not bool(tool_calls),
-                    streamed=streamed,
+                    self.current_turn.turn_id,
+                    EventPayloadBuilder.build_assistant_message_payload(
+                        content=message.content or "",
+                        tool_call_count=len(tool_calls),
+                        final=not bool(tool_calls),
+                        streamed=streamed,
+                    ),
                 )
                 # === event emit ===
 
                 if not tool_calls:
                     
                     # === event emit and turn state update ===
-                    turn.complete("assistant_final")
-                    result = self._finalize_turn(turn, message.content or "")
+                    self.current_turn.complete("assistant_final")
+                    result = self._finalize_turn(message.content or "")
                     # === event emit and turn state update ===
 
                     return result.final_response
                     
                 for tool_call in tool_calls:
-                    self._append_tool_message(self._handle_tool_call(tool_call, turn), turn.turn_id)
+                    self._append_tool_message(self._handle_tool_call(tool_call))
 
             message = "Reached max turns before completing the task."
 
             # === event emit and turn state update ===
-            turn.fail("max_turns_exhausted", message)
-            self._emit(EVENT_ERROR, turn_id, message=message)
-            result = self._finalize_turn(turn, message)
+            self.current_turn.fail("max_turns_exhausted", message)
+            self._emit(
+                EVENT_ERROR,
+                self.current_turn.turn_id, 
+                EventPayloadBuilder.build_error_payload(message)
+            )
+            result = self._finalize_turn(message)
             # === event emit and turn state update ===
 
             return result.final_response
         except KeyboardInterrupt:
 
             # === event emit and turn state update ===
-            turn.interrupt(INTERRUPTED_MESSAGE)
-            self._emit(EVENT_ERROR, turn_id, message=turn.error or "Interrupted by user.")
-            result = self._finalize_turn(turn, turn.error or INTERRUPTED_MESSAGE)
+            self.current_turn.interrupt(INTERRUPTED_MESSAGE)
+            self._emit(
+                EVENT_ERROR,
+                self.current_turn.turn_id,
+                EventPayloadBuilder.build_error_payload(self.current_turn.error or "Interrupted by user."),
+            )
+            result = self._finalize_turn(self.current_turn.error or INTERRUPTED_MESSAGE)
             # === event emit and turn state update ===
 
             return result.final_response
         except Exception as exc:
-            reason = self._error_exit_reason(turn)
+            reason = self._error_exit_reason()
 
             # === event emit and turn state update ===
-            turn.fail(reason, str(exc))
-            self._emit(EVENT_ERROR, turn_id, message=str(exc))
-            self._finalize_turn(turn)
+            self.current_turn.fail(reason, str(exc))
+            self._emit(
+                EVENT_ERROR,
+                self.current_turn.turn_id,
+                EventPayloadBuilder.build_error_payload(str(exc))
+            )
+            self._finalize_turn()
             # === event emit and turn state update ===
-
+     
             raise
 
     # === LLM 请求 ===
@@ -152,11 +176,10 @@ class AgentLoop:
         self,
         request_messages: list[dict],
         tool_schemas: list[dict],
-        turn: TurnRuntime,
     ):
         """请求 llm 消息, 支持流式响应 (默认) 和非流式响应"""
         if hasattr(self.llm_client, "stream_chat"):
-            message, streamed = self._stream_assistant_message(request_messages, tool_schemas, turn)
+            message, streamed = self._stream_assistant_message(request_messages, tool_schemas)
             return message, streamed
 
         response = self.llm_client.chat(
@@ -169,9 +192,9 @@ class AgentLoop:
         self,
         request_messages: list[dict],
         tool_schemas: list[dict],
-        turn: TurnRuntime,
     ):
         """请求 llm 流式消息"""
+        turn = self._active_turn()
 
         # === turn state update ===
         turn.start_streaming()
@@ -188,7 +211,7 @@ class AgentLoop:
             self._emit(
                 EVENT_ASSISTANT_DELTA,
                 turn.turn_id,
-                delta=content_delta,
+                EventPayloadBuilder.build_assistant_delta_payload(content_delta),
             )
             # === event emit ===
 
@@ -207,18 +230,19 @@ class AgentLoop:
             self.session_store.append_message(self.session_id, messages[0])
         return messages
     
-    def _append_message(self, message: dict, turn_id: str | None = None) -> None:
+    def _append_message(self, message: dict) -> None:
         self.messages.append(message)
         if self.session_store and self.session_id:
-            self.session_store.append_message(self.session_id, message, turn_id=turn_id)
+            turn = self._active_turn()
+            self.session_store.append_message(self.session_id, message, turn.turn_id)
 
     # === 用户消息处理 ===
-    def _append_user_message(self, content: str, turn_id: str) -> None:
-        self._append_message({"role": "user", "content": content}, turn_id=turn_id)
+    def _append_user_message(self, content: str) -> None:
+        self._append_message({"role": "user", "content": content})
 
     # === AI 消息处理 ===
-    def _append_assistant_message(self, message, turn_id: str) -> None:
-        self._append_message(self._assistant_message_to_dict(message), turn_id=turn_id)
+    def _append_assistant_message(self, message) -> None:
+        self._append_message(self._assistant_message_to_dict(message))
 
     def _assistant_message_to_dict(self, message) -> dict:
         result = {
@@ -242,27 +266,27 @@ class AgentLoop:
         return result
 
     # === 工具消息处理 ===
-    def _append_tool_message(self, message: dict, turn_id: str) -> None:
-        self._append_message(message, turn_id=turn_id)
+    def _append_tool_message(self, message: dict) -> None:
+        self._append_message(message)
 
     def _handle_tool_call(
         self,
         tool_call,
-        turn: TurnRuntime | None = None,
-        turn_id: str | None = None,
     ) -> dict:
         tool_name = tool_call.function.name
         args, parse_error = self._parse_tool_arguments(tool_call.function.arguments)
-        turn = turn or TurnRuntime(turn_id=turn_id or new_turn_id())
+        turn = self._active_turn()
         
         # === event emit and turn state update ===
         turn.start_tool(tool_name)
         self._emit(
             EVENT_TOOL_CALL,
             turn.turn_id,
-            tool_call_id=tool_call.id,
-            tool_name=tool_name,
-            arguments=args,
+            EventPayloadBuilder.build_tool_call_payload(
+                tool_call_id=tool_call.id,
+                tool_name=tool_name,
+                arguments=args,
+            ),
         )
         # === event emit and turn state update ===
 
@@ -272,11 +296,13 @@ class AgentLoop:
         self._emit(
             EVENT_TOOL_RESULT,
             turn.turn_id,
-            tool_call_id=tool_call.id,
-            tool_name=tool_name,
-            ok=result.ok,
-            output=result.output,
-            error=result.error,
+            EventPayloadBuilder.build_tool_result_payload(
+                tool_call_id=tool_call.id,
+                tool_name=tool_name,
+                ok=result.ok,
+                output=result.output,
+                error=result.error,
+            ),
         )
         turn.finish_tool()
         # === event emit and turn state update ===
@@ -307,7 +333,8 @@ class AgentLoop:
 
         return args, None
 
-    def _finalize_turn(self, turn: TurnRuntime, final_response: str = ""):
+    def _finalize_turn(self, final_response: str = ""):
+        turn = self._active_turn()
         result = turn.finalize(final_response)
         if self.session_store and self.session_id:
             self.session_store.append_turn(
@@ -325,15 +352,19 @@ class AgentLoop:
         self._emit(
             EVENT_TURN_END,
             turn.turn_id,
-            status=result.status,
-            exit_reason=result.exit_reason,
-            error=result.error,
-            model_calls=turn.model_calls,
-            tool_calls=turn.tool_calls,
+            EventPayloadBuilder.build_turn_end_payload(
+                status=result.status,
+                exit_reason=result.exit_reason,
+                error=result.error,
+                model_calls=turn.model_calls,
+                tool_calls=turn.tool_calls,
+            ),
         )
+        self.current_turn = None
         return result
 
-    def _error_exit_reason(self, turn: TurnRuntime):
+    def _error_exit_reason(self):
+        turn = self._active_turn()
         if turn.status == "streaming_assistant":
             return "stream_error"
         if turn.status == "running_tool":
@@ -342,8 +373,13 @@ class AgentLoop:
             return "model_error"
         return "unknown_error"
 
+    def _active_turn(self) -> TurnRuntime:
+        if self.current_turn is None:
+            raise RuntimeError("AgentLoop has no active turn.")
+        return self.current_turn
+
     # === 事件发送 ===
-    def _emit(self, event_type: str, turn_id: str, **payload) -> None:
+    def _emit(self, event_type: str, turn_id: str, payload: dict) -> None:
         self.event_sink.emit(
             RuntimeEvent(
                 type=event_type,
