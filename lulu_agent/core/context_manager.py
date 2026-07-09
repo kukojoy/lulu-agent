@@ -5,14 +5,18 @@ ContextManager 执行逻辑
 2. 每轮对话前, AgentLoop 调用 ContextManager.prepare_messages(messages)
     - 构造本轮临时 api_messages, 不修改 AgentLoop.messages
     - 将 context blocks 临时合并进 system msg
-    - 筛出 system msg 和 最近的 max_messages 条非 system msg
-    - 如果裁剪后的第一条消息来自 tool, 额外包含其 tool-call assistant msg
-    - 返回合并后的 system + [selected non-system messages]
+    - 按 turn 顺序将历史压缩摘要和未压缩 raw turn messages 组装进 api_messages
 3. LLMClinet 接收 ContextManager 返回的消息列表, 生成 response
 """
 
 from html import escape
 
+from lulu_agent.core.context_budget import (
+    ContextBudget,
+    ContextPlan,
+    ContextPlanner,
+    group_messages_by_turn,
+)
 from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.loader import SkillLoader
@@ -27,6 +31,7 @@ class ContextManager:
         skill_loader: SkillLoader | None = None,
         session_store: SessionStore | None = None,
         session_id: str | None = None,
+        context_budget: ContextBudget | None = None,
     ):
         if max_messages < 1:
             raise ValueError("max_messages must be at least 1")
@@ -36,6 +41,7 @@ class ContextManager:
         self.skill_loader = skill_loader or SkillLoader()
         self.session_store = session_store
         self.session_id = session_id
+        self.context_planner = ContextPlanner(context_budget)
 
     def prepare_messages(
         self,
@@ -43,6 +49,18 @@ class ContextManager:
         context_blocks: list[dict] | None = None,
     ) -> list[dict]:
         return self._build_api_messages(messages, context_blocks=context_blocks)
+
+    def plan_context(self, messages: list[dict]) -> ContextPlan:
+        turns = []
+        compressions = []
+        if self.session_store and self.session_id:
+            turns = self.session_store.load_turns(self.session_id)
+            compressions = self.session_store.load_compressions(self.session_id)
+        return self.context_planner.plan(
+            messages=messages,
+            turns=turns,
+            compressions=compressions,
+        )
 
     def _build_api_messages(
         self,
@@ -55,12 +73,12 @@ class ContextManager:
             context_blocks=context_blocks,
         )
         non_system_messages = self._non_system_messages(messages)
-        selected = self._recent_messages(non_system_messages)
+        context_messages = self._build_turn_context_messages(non_system_messages)
 
         api_messages = []
         if system_message:
             api_messages.append(system_message)
-        api_messages.extend(selected)
+        api_messages.extend(context_messages) # NOTE: 这些 messages 可能包含 turn_id 字段, 但不影响 LLM 请求
         return api_messages
 
     def _first_system_message(self, messages: list[dict]) -> dict | None:
@@ -73,15 +91,6 @@ class ContextManager:
     def _non_system_messages(self, messages: list[dict]) -> list[dict]:
         """获取非 system msg 列表"""
         return [message for message in messages if message.get("role") != "system"]
-
-    def _recent_messages(self, non_system_messages: list[dict]) -> list[dict]:
-        """获取最近的 max_messages 条非 system msg, 并包含 tool-call parent msg"""
-        if len(non_system_messages) <= self.max_messages:
-            return list(non_system_messages)
-
-        start = len(non_system_messages) - self.max_messages
-        selected = non_system_messages[start:]
-        return self._include_tool_call_parent(non_system_messages, start, selected)
 
     def _merge_context_blocks_into_system_message(
         self,
@@ -201,6 +210,74 @@ class ContextManager:
             }
         ]
 
+    def _build_turn_context_messages(self, non_system_messages: list[dict]) -> list[dict]:
+        """按 turn 顺序组装压缩摘要和未压缩 raw messages"""
+        groups, _ = group_messages_by_turn(non_system_messages)
+        compression_by_turn_id = self._compression_by_turn_id()
+        emitted_compression_ids: set[str] = set()
+        context_messages = self._unassigned_messages(non_system_messages)
+
+        for group in groups:
+            compression = compression_by_turn_id.get(group.turn_id)
+            if compression:
+                compression_id = str(compression.get("compression_id") or "")
+                if compression_id not in emitted_compression_ids:
+                    message = self._compression_message(compression)
+                    if message:
+                        context_messages.append(message)
+                    else:
+                        context_messages.extend(group.messages)
+                        continue
+                    if compression_id:
+                        emitted_compression_ids.add(compression_id)
+                continue
+            context_messages.extend(group.messages)
+        return context_messages
+
+    def _unassigned_messages(self, non_system_messages: list[dict]) -> list[dict]:
+        """保留还没有 turn_id 的历史消息, 避免兼容旧 session 时丢上下文"""
+        messages = []
+        for message in non_system_messages:
+            turn_id = message.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                messages.append(message)
+        return messages
+
+    def _compression_by_turn_id(self) -> dict[str, dict]:
+        """获取每个 turn_id 对应的最新 compression record"""
+        result: dict[str, dict] = {} # turn_id -> compression
+        for compression in self._session_compressions():
+            turn_ids = compression.get("covered_turn_ids")
+            if not isinstance(turn_ids, list):
+                continue
+            for turn_id in turn_ids:
+                if isinstance(turn_id, str) and turn_id:
+                    result[turn_id] = compression # 新记录会覆盖旧记录
+        return result
+
+    def _compression_message(self, compression: dict) -> dict | None:
+        """将 compression record 转成临时 api context message"""
+        summary = compression.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            return None
+        covered = ", ".join(compression.get("covered_turn_ids") or [])
+        lines = [
+            "Compressed summary of earlier conversation turns.",
+            f"covered_turn_ids: {covered}" if covered else "covered_turn_ids: unknown",
+            f"scope: {compression.get('scope') or 'unknown'}",
+            "",
+            summary.strip(),
+        ]
+        return {
+            "role": "user",
+            "content": "\n".join(lines),
+        }
+
+    def _session_compressions(self) -> list[dict]:
+        if not self.session_store or not self.session_id:
+            return []
+        return self.session_store.load_compressions(self.session_id)
+
     def _render_context_block(self, block: dict) -> str | None:
         """渲染单个 context block
         
@@ -228,36 +305,3 @@ class ContextManager:
                 "</context_block>",
             ]
         )
-
-    def _include_tool_call_parent(
-        self,
-        non_system_messages: list[dict],
-        start: int,
-        selected: list[dict],
-    ) -> list[dict]:
-        """如果 selected 的第一条消息来自 tool, 则包含其 tool-call parent msg"""
-        if not selected or selected[0].get("role") != "tool":
-            return selected
-
-        tool_call_id = selected[0].get("tool_call_id")
-        parent = self._find_parent_tool_call(non_system_messages[:start], tool_call_id)
-        if not parent:
-            return selected
-        return [parent, *selected]
-
-    def _find_parent_tool_call(
-        self,
-        candidates: list[dict],
-        tool_call_id: str | None,
-    ) -> dict | None:
-        """从 candidates 中找到 tool_call_id 对应的 parent msg"""
-        if not tool_call_id:
-            return None
-
-        for message in reversed(candidates):
-            if message.get("role") != "assistant":
-                continue
-            for tool_call in message.get("tool_calls", []):
-                if tool_call.get("id") == tool_call_id:
-                    return message
-        return None

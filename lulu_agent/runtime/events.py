@@ -88,6 +88,7 @@ class AssistantMessagePayload:
     tool_call_count: int
     final: bool
     streamed: bool
+    usage: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,7 @@ class EventPayloadBuilder:
         tool_call_count: int,
         final: bool,
         streamed: bool,
+        usage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return payload_to_dict(
             AssistantMessagePayload(
@@ -192,6 +194,7 @@ class EventPayloadBuilder:
                 tool_call_count=tool_call_count,
                 final=final,
                 streamed=streamed,
+                usage=usage,
             )
         )
 

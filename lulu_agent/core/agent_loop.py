@@ -1,7 +1,9 @@
 import json
+from typing import Any
 
 from lulu_agent.core.assistant_response import StreamingAssistantResponseBuilder
 from lulu_agent.config import config
+from lulu_agent.core.context_compressor import compress_turns
 from lulu_agent.core.context_manager import ContextManager
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.runtime.events import (
@@ -81,6 +83,7 @@ class AgentLoop:
         self._append_user_message(user_input)
 
         try:
+            self._compress_context()
             for _ in range(self.max_turns):
                 request_messages = self.context_manager.prepare_messages(self.messages)
                 tool_schemas = self.tool_registry.schemas()
@@ -100,12 +103,13 @@ class AgentLoop:
                 )
                 # === event emit and turn state update ===
 
-                message, streamed = self._request_assistant_message(request_messages, tool_schemas)
+                message, streamed, usage = self._request_assistant_message(request_messages, tool_schemas)
                 tool_calls = message.tool_calls or []
-
+                
                 self._append_assistant_message(message)
 
-                # === event emit ===
+                # === event emit and turn state update ===
+                self.current_turn.record_model_usage(usage)
                 self._emit(
                     EVENT_ASSISTANT_MESSAGE,
                     self.current_turn.turn_id,
@@ -114,9 +118,10 @@ class AgentLoop:
                         tool_call_count=len(tool_calls),
                         final=not bool(tool_calls),
                         streamed=streamed,
+                        usage=usage,
                     ),
                 )
-                # === event emit ===
+                # === event emit and turn state update ===
 
                 if not tool_calls:
                     
@@ -171,6 +176,26 @@ class AgentLoop:
      
             raise
 
+    # === 上下文压缩 ===
+    def _compress_context(self) -> None:
+        """在本轮首次 LLM 请求前, 尝试压缩历史 turn"""
+        if not self.session_store or not self.session_id:
+            return
+        if not hasattr(self.llm_client, "chat"):
+            return
+
+        try:
+            plan = self.context_manager.plan_context(self.messages)
+            compress_turns(
+                messages=self.messages,
+                plan=plan,
+                llm_client=self.llm_client,
+                session_store=self.session_store,
+                session_id=self.session_id,
+            )
+        except Exception:
+            raise
+    
     # === LLM 请求 ===
     def _request_assistant_message(
         self,
@@ -179,14 +204,14 @@ class AgentLoop:
     ):
         """请求 llm 消息, 支持流式响应 (默认) 和非流式响应"""
         if hasattr(self.llm_client, "stream_chat"):
-            message, streamed = self._stream_assistant_message(request_messages, tool_schemas)
-            return message, streamed
+            response = self._stream_assistant_message(request_messages, tool_schemas)
+            return response.message, response.streamed, response.usage
 
         response = self.llm_client.chat(
             messages=request_messages,
             tools=tool_schemas,
         )
-        return response.choices[0].message, False
+        return response.choices[0].message, False, _extract_usage(response)
 
     def _stream_assistant_message(
         self,
@@ -216,7 +241,7 @@ class AgentLoop:
             # === event emit ===
 
         response = builder.build()
-        return response.message, response.streamed
+        return response
 
     # === 消息加载/存储 ===
     def _load_or_initialize_messages(self) -> list[dict]:
@@ -231,9 +256,11 @@ class AgentLoop:
         return messages
     
     def _append_message(self, message: dict) -> None:
+        turn = self._active_turn()
+        
+        message["turn_id"] = turn.turn_id
         self.messages.append(message)
         if self.session_store and self.session_id:
-            turn = self._active_turn()
             self.session_store.append_message(self.session_id, message, turn.turn_id)
 
     # === 用户消息处理 ===
@@ -346,6 +373,7 @@ class AgentLoop:
                     "error": result.error,
                     "model_calls": turn.model_calls,
                     "tool_calls": turn.tool_calls,
+                    "model_usage": turn.model_usage,
                     "final_response": result.final_response,
                 },
             )
@@ -387,3 +415,18 @@ class AgentLoop:
                 payload=payload,
             )
         )
+
+
+def _extract_usage(response) -> dict[str, Any] | None:
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is None:
+        return None
+
+    result: dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+        if isinstance(value, int):
+            result[key] = value
+    return result or None

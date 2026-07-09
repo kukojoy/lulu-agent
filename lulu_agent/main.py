@@ -78,6 +78,7 @@ def format_session_inspection(summary: dict) -> str:
         f"Title: {metadata.get('title') or '(untitled)'}",
         f"Messages: {summary['message_count']}",
         f"Turns: {summary.get('turn_count', 0)}",
+        f"Compressions: {summary.get('compression_count', 0)}",
         "Transcript summary:",
     ]
     for index, message in enumerate(summary["messages"], start=1):
@@ -100,6 +101,16 @@ def format_session_inspection(summary: dict) -> str:
             if turn.get("error"):
                 detail = f"{detail} error={turn['error']}"
             lines.append(f"{index}. {turn.get('turn_id')}: {detail}")
+    if summary.get("compressions"):
+        lines.append("Compression summary:")
+        for index, compression in enumerate(summary["compressions"], start=1):
+            turns = ", ".join(compression.get("covered_turn_ids") or [])
+            detail = (
+                f"{compression.get('scope')} turns=[{turns}] "
+                f"source_tokens={compression.get('source_prompt_tokens', 0)} "
+                f"summary_tokens={compression.get('summary_tokens', 0)}"
+            )
+            lines.append(f"{index}. {compression.get('compression_id')}: {detail}")
     return "\n".join(lines)
 
 
@@ -150,8 +161,7 @@ def main(argv: list[str] | None = None):
 
         try:
             response = agent.run(user_input)
-        except LLMClientError as exc:
-            print(f"LLM error: {exc}")
+        except Exception as exc:
             continue
 
 

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class AssistantMessage:
 class AssistantResponse:
     message: AssistantMessage
     streamed: bool
+    usage: dict[str, Any] | None = None
 
 
 class StreamingAssistantResponseBuilder:
@@ -41,6 +42,7 @@ class StreamingAssistantResponseBuilder:
         self.content_parts: list[str] = []
         self.tool_call_parts: dict[int, dict] = {} # index -> tool_call
         self.streamed = False
+        self.usage: dict[str, Any] | None = None
 
     def consume(self, chunks: Iterable) -> Iterable[str]:
         """消费流式响应消息块
@@ -51,7 +53,12 @@ class StreamingAssistantResponseBuilder:
         3. self._merge_tool_call_delta(tool_call_delta) -> self.tool_call_parts[index] = {id, type, function_name, arguments}
         """
         for chunk in chunks:
-            delta = chunk.choices[0].delta
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                self.usage = _extract_usage(chunk)
+                continue
+
+            delta = choices[0].delta
             content_delta = getattr(delta, "content", None)
             if content_delta:
                 self.streamed = True
@@ -70,6 +77,7 @@ class StreamingAssistantResponseBuilder:
                 tool_calls=self._build_tool_calls(),
             ),
             streamed=self.streamed,
+            usage=self.usage,
         )
 
     def _merge_tool_call_delta(self, tool_call_delta) -> None:
@@ -120,3 +128,18 @@ class StreamingAssistantResponseBuilder:
                 )
             )
         return tool_calls
+
+
+def _extract_usage(chunk) -> dict[str, Any] | None:
+    usage = getattr(chunk, "usage", None)
+    if usage is None and isinstance(chunk, dict):
+        usage = chunk.get("usage")
+    if usage is None:
+        return None
+
+    result: dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+        if isinstance(value, int):
+            result[key] = value
+    return result or None

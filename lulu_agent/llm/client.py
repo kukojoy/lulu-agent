@@ -26,11 +26,11 @@ class LLMClient:
     def _create_chat_completion(self, messages, tools=None, stream=False):
         kwargs = {
             "model": self.model,
-            "messages": messages,
-            "stream_options": {"include_usage": False}
+            "messages": messages
         }
         if stream:
             kwargs["stream"] = True
+            kwargs["stream_options"] = {"include_usage": True}   
         if tools:
             kwargs["tools"] = tools
 

@@ -9,6 +9,7 @@ DEFAULT_SESSIONS_DIR = Path(".lulu") / "sessions"
 SESSION_INDEX_FILENAME = "sessions_index.jsonl"
 TITLE_MAX_CHARS = 60
 TURN_SUMMARY_MAX_RESPONSE_CHARS = 240
+COMPRESSION_SUMMARY_MAX_CHARS = 500
 
 
 class SessionStoreError(RuntimeError):
@@ -165,6 +166,52 @@ class SessionStore:
             turns.append(turn)
         return turns
 
+    def append_compression(self, session_id: str, compression: dict[str, Any]) -> dict[str, Any]:
+        """向指定 session 追加一条 compression 记录, 并更新 session metadata"""
+        self._ensure_root()
+        path = self._existing_session_path(session_id)
+        now = _utc_now()
+        metadata = self._get_latest_metadata_for_session(session_id)
+        metadata["updated_at"] = now.isoformat()
+
+        summary = _summarize_compression(compression)
+        record = {
+            "type": "compression",
+            "session_id": session_id,
+            "created_at": now.isoformat(),
+            "compression": summary,
+        }
+
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False))
+            file.write("\n")
+            file.flush()
+
+        self.append_index(metadata)
+        return metadata
+
+    def load_compressions(self, session_id: str) -> list[dict[str, Any]]:
+        """加载指定 session 的所有 compression 记录"""
+        path = self._existing_session_path(session_id)
+        compressions: list[dict[str, Any]] = []
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            record = _parse_jsonl_record(path, line_number, line)
+            if record.get("type") != "compression":
+                continue
+            if record.get("session_id") != session_id:
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
+                )
+            compression = record.get("compression")
+            if not isinstance(compression, dict):
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: compression must be an object."
+                )
+            compressions.append(compression)
+        return compressions
+
     def list_sessions(self, limit: int | None = None) -> list[dict[str, Any]]:
         """列出所有 session 的最新 metadata, 按 updated_at 降序排列
         Args:
@@ -188,16 +235,19 @@ class SessionStore:
         self._get_latest_metadata_for_session(session_id)
         self.load_messages(session_id)
         self.load_turns(session_id)
+        self.load_compressions(session_id)
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         """获取指定 session 的 metadata, 消息数量和消息列表 (部分字段)"""
         metadata = self._get_latest_metadata_for_session(session_id)
         messages = self.load_messages(session_id)
         turns = self.load_turns(session_id)
+        compressions = self.load_compressions(session_id)
         return {
             "metadata": metadata,
             "message_count": len(messages),
             "turn_count": len(turns),
+            "compression_count": len(compressions),
             "messages": [
                 {
                     "role": message.get("role"),
@@ -209,6 +259,7 @@ class SessionStore:
                 for message in messages
             ],
             "turns": turns[-10:],
+            "compressions": compressions[-10:],
         }
 
     def _metadata_for_append(
@@ -340,15 +391,29 @@ def _summarize_content(content: Any, max_chars: int = 120) -> str:
 
 
 def _summarize_turn(turn: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "turn_id": turn.get("turn_id"),
         "status": turn.get("status"),
         "exit_reason": turn.get("exit_reason"),
         "error": turn.get("error"),
         "model_calls": int(turn.get("model_calls") or 0),
         "tool_calls": int(turn.get("tool_calls") or 0),
-        "final_response": _summarize_content(
-            turn.get("final_response"),
-            TURN_SUMMARY_MAX_RESPONSE_CHARS,
-        ),
+        "final_response": turn.get("final_response"),
+    }
+    if "model_usage" in turn:
+        summary["model_usage"] = turn.get("model_usage")
+    return summary
+
+
+def _summarize_compression(compression: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "compression_id": compression.get("compression_id"),
+        "scope": compression.get("scope"),
+        "covered_turn_ids": compression.get("covered_turn_ids"),
+        "summary": compression.get("summary"),
+        "source_message_count": int(compression.get("source_message_count") or 0),
+        "source_prompt_tokens": int(compression.get("source_prompt_tokens") or 0),
+        "summary_tokens": int(compression.get("summary_tokens") or 0),
+        "model": compression.get("model"),
+        "reason": compression.get("reason"),
     }

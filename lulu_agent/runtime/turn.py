@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 
 TurnStatus = Literal[
@@ -44,6 +44,7 @@ class TurnRuntime:
     current_tool: str | None = None
     model_calls: int = 0
     tool_calls: int = 0
+    model_usage: list[dict[str, Any]] = field(default_factory=list)
 
     def set_status(self, status: TurnStatus) -> None:
         self.status = status
@@ -51,6 +52,17 @@ class TurnRuntime:
     def start_model_request(self) -> None:
         self.model_calls += 1
         self.status = "requesting_model"
+
+    def record_model_usage(self, usage: dict[str, Any] | None) -> None:
+        if not usage:
+            return
+        normalized: dict[str, Any] = {"request_index": self.model_calls}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                normalized[key] = value
+        if len(normalized) > 1:
+            self.model_usage.append(normalized)
 
     def start_streaming(self) -> None:
         self.status = "streaming_assistant"
