@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from lulu_agent.runtime.events import RuntimeEvent
+from lulu_agent.storage.jsonl import parse_jsonl_record
 
 
 DEFAULT_TRACES_DIR = Path(".lulu") / "traces"
@@ -50,7 +51,7 @@ class TraceStore:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            record = _parse_jsonl_record(path, line_number, line)
+            record = parse_jsonl_record(path, line_number, line)
             _validate_trace_record(path, line_number, record, session_id)
             if turn_id is not None and record.get("turn_id") != turn_id:
                 continue
@@ -68,21 +69,6 @@ class TraceStore:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _parse_jsonl_record(path: Path, line_number: int, line: str) -> dict[str, Any]:
-    try:
-        record = json.loads(line)
-    except json.JSONDecodeError as exc:
-        raise TraceStoreError(
-            f"Invalid JSONL record at {path}:{line_number}: {exc.msg}"
-        ) from exc
-
-    if not isinstance(record, dict):
-        raise TraceStoreError(
-            f"Invalid JSONL record at {path}:{line_number}: expected object."
-        )
-    return record
 
 
 def _validate_trace_record(

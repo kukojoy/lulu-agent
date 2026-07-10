@@ -1,10 +1,10 @@
 import json
-from typing import Any
 
 from lulu_agent.core.assistant_response import StreamingAssistantResponseBuilder
 from lulu_agent.config import config
-from lulu_agent.core.context_compressor import compress_turns
-from lulu_agent.core.context_manager import ContextManager
+from lulu_agent.context.compressor import compress_turns
+from lulu_agent.context.manager import ContextManager
+from lulu_agent.llm.usage import extract_usage
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_DELTA,
@@ -181,20 +181,15 @@ class AgentLoop:
         """在本轮首次 LLM 请求前, 尝试压缩历史 turn"""
         if not self.session_store or not self.session_id:
             return
-        if not hasattr(self.llm_client, "chat"):
-            return
 
-        try:
-            plan = self.context_manager.plan_context(self.messages)
-            compress_turns(
-                messages=self.messages,
-                plan=plan,
-                llm_client=self.llm_client,
-                session_store=self.session_store,
-                session_id=self.session_id,
-            )
-        except Exception:
-            raise
+        plan = self.context_manager.plan_context(self.messages)
+        compress_turns(
+            messages=self.messages,
+            plan=plan,
+            llm_client=self.llm_client,
+            session_store=self.session_store,
+            session_id=self.session_id,
+        )
     
     # === LLM 请求 ===
     def _request_assistant_message(
@@ -211,7 +206,7 @@ class AgentLoop:
             messages=request_messages,
             tools=tool_schemas,
         )
-        return response.choices[0].message, False, _extract_usage(response)
+        return response.choices[0].message, False, extract_usage(response)
 
     def _stream_assistant_message(
         self,
@@ -362,34 +357,22 @@ class AgentLoop:
 
     def _finalize_turn(self, final_response: str = ""):
         turn = self._active_turn()
-        result = turn.finalize(final_response)
+        turn_record = turn.to_record(final_response)
         if self.session_store and self.session_id:
-            self.session_store.append_turn(
-                self.session_id,
-                {
-                    "turn_id": result.turn_id,
-                    "status": result.status,
-                    "exit_reason": result.exit_reason,
-                    "error": result.error,
-                    "model_calls": turn.model_calls,
-                    "tool_calls": turn.tool_calls,
-                    "model_usage": turn.model_usage,
-                    "final_response": result.final_response,
-                },
-            )
+            self.session_store.append_turn(self.session_id, turn_record)
         self._emit(
             EVENT_TURN_END,
             turn.turn_id,
             EventPayloadBuilder.build_turn_end_payload(
-                status=result.status,
-                exit_reason=result.exit_reason,
-                error=result.error,
+                status=turn_record.status,
+                exit_reason=turn_record.exit_reason,
+                error=turn_record.error,
                 model_calls=turn.model_calls,
                 tool_calls=turn.tool_calls,
             ),
         )
         self.current_turn = None
-        return result
+        return turn_record
 
     def _error_exit_reason(self):
         turn = self._active_turn()
@@ -415,18 +398,3 @@ class AgentLoop:
                 payload=payload,
             )
         )
-
-
-def _extract_usage(response) -> dict[str, Any] | None:
-    usage = getattr(response, "usage", None)
-    if usage is None and isinstance(response, dict):
-        usage = response.get("usage")
-    if usage is None:
-        return None
-
-    result: dict[str, Any] = {}
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-        if isinstance(value, int):
-            result[key] = value
-    return result or None

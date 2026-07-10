@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from lulu_agent.llm.usage import extract_usage
+
 
 @dataclass(frozen=True)
 class AssistantToolFunction:
@@ -55,7 +57,7 @@ class StreamingAssistantResponseBuilder:
         for chunk in chunks:
             choices = getattr(chunk, "choices", None) or []
             if not choices:
-                self.usage = _extract_usage(chunk)
+                self.usage = extract_usage(chunk)
                 continue
 
             delta = choices[0].delta
@@ -128,18 +130,3 @@ class StreamingAssistantResponseBuilder:
                 )
             )
         return tool_calls
-
-
-def _extract_usage(chunk) -> dict[str, Any] | None:
-    usage = getattr(chunk, "usage", None)
-    if usage is None and isinstance(chunk, dict):
-        usage = chunk.get("usage")
-    if usage is None:
-        return None
-
-    result: dict[str, Any] = {}
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-        if isinstance(value, int):
-            result[key] = value
-    return result or None

@@ -107,7 +107,8 @@ def format_session_inspection(summary: dict) -> str:
             turns = ", ".join(compression.get("covered_turn_ids") or [])
             detail = (
                 f"{compression.get('scope')} turns=[{turns}] "
-                f"source_tokens={compression.get('source_prompt_tokens', 0)} "
+                f"source_prompt_chars={compression.get('source_prompt_chars', 0)} "
+                f"summary_chars={compression.get('summary_chars', 0)} "
                 f"summary_tokens={compression.get('summary_tokens', 0)}"
             )
             lines.append(f"{index}. {compression.get('compression_id')}: {detail}")
@@ -162,6 +163,7 @@ def main(argv: list[str] | None = None):
         try:
             response = agent.run(user_input)
         except Exception as exc:
+            print(f"[Main Error] {exc}")
             continue
 
 

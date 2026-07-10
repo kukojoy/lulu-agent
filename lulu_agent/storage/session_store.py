@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from lulu_agent.runtime.compression import CompressionRecord
+from lulu_agent.runtime.turn import TurnRecord
+from lulu_agent.storage.jsonl import parse_jsonl_record
+
 
 DEFAULT_SESSIONS_DIR = Path(".lulu") / "sessions"
 SESSION_INDEX_FILENAME = "sessions_index.jsonl"
@@ -97,7 +101,7 @@ class SessionStore:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            record = _parse_jsonl_record(path, line_number, line)
+            record = parse_jsonl_record(path, line_number, line)
             if record.get("type") != "message":
                 continue
             if record.get("session_id") != session_id:
@@ -120,7 +124,7 @@ class SessionStore:
             messages.append(message)
         return messages
 
-    def append_turn(self, session_id: str, turn: dict[str, Any]) -> dict[str, Any]:
+    def append_turn(self, session_id: str, turn: TurnRecord) -> dict[str, Any]:
         """向指定 session 追加一条 turn 摘要, 并更新 session metadata"""
         self._ensure_root()
         path = self._existing_session_path(session_id)
@@ -128,12 +132,11 @@ class SessionStore:
         metadata = self._get_latest_metadata_for_session(session_id)
         metadata["updated_at"] = now.isoformat()
 
-        summary = _summarize_turn(turn)
         record = {
             "type": "turn",
             "session_id": session_id,
             "created_at": now.isoformat(),
-            "turn": summary,
+            "turn": turn.to_dict(),
         }
 
         with path.open("a", encoding="utf-8") as file:
@@ -144,14 +147,14 @@ class SessionStore:
         self.append_index(metadata)
         return metadata
 
-    def load_turns(self, session_id: str) -> list[dict[str, Any]]:
+    def load_turns(self, session_id: str) -> list[TurnRecord]:
         """加载指定 session 的所有 turn 摘要"""
         path = self._existing_session_path(session_id)
-        turns: list[dict[str, Any]] = []
+        turns: list[TurnRecord] = []
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            record = _parse_jsonl_record(path, line_number, line)
+            record = parse_jsonl_record(path, line_number, line)
             if record.get("type") != "turn":
                 continue
             if record.get("session_id") != session_id:
@@ -163,10 +166,10 @@ class SessionStore:
                 raise SessionStoreError(
                     f"Invalid session record at {path}:{line_number}: turn must be an object."
                 )
-            turns.append(turn)
+            turns.append(TurnRecord.from_dict(turn))
         return turns
 
-    def append_compression(self, session_id: str, compression: dict[str, Any]) -> dict[str, Any]:
+    def append_compression(self, session_id: str, compression: CompressionRecord) -> dict[str, Any]:
         """向指定 session 追加一条 compression 记录, 并更新 session metadata"""
         self._ensure_root()
         path = self._existing_session_path(session_id)
@@ -174,12 +177,11 @@ class SessionStore:
         metadata = self._get_latest_metadata_for_session(session_id)
         metadata["updated_at"] = now.isoformat()
 
-        summary = _summarize_compression(compression)
         record = {
             "type": "compression",
             "session_id": session_id,
             "created_at": now.isoformat(),
-            "compression": summary,
+            "compression": compression.to_dict(),
         }
 
         with path.open("a", encoding="utf-8") as file:
@@ -190,14 +192,14 @@ class SessionStore:
         self.append_index(metadata)
         return metadata
 
-    def load_compressions(self, session_id: str) -> list[dict[str, Any]]:
+    def load_compressions(self, session_id: str) -> list[CompressionRecord]:
         """加载指定 session 的所有 compression 记录"""
         path = self._existing_session_path(session_id)
-        compressions: list[dict[str, Any]] = []
+        compressions: list[CompressionRecord] = []
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            record = _parse_jsonl_record(path, line_number, line)
+            record = parse_jsonl_record(path, line_number, line)
             if record.get("type") != "compression":
                 continue
             if record.get("session_id") != session_id:
@@ -209,7 +211,7 @@ class SessionStore:
                 raise SessionStoreError(
                     f"Invalid session record at {path}:{line_number}: compression must be an object."
                 )
-            compressions.append(compression)
+            compressions.append(CompressionRecord.from_dict(compression))
         return compressions
 
     def list_sessions(self, limit: int | None = None) -> list[dict[str, Any]]:
@@ -258,8 +260,8 @@ class SessionStore:
                 }
                 for message in messages
             ],
-            "turns": turns[-10:],
-            "compressions": compressions[-10:],
+            "turns": [turn.to_dict() for turn in turns[-10:]],
+            "compressions": [compression.to_dict() for compression in compressions[-10:]],
         }
 
     def _metadata_for_append(
@@ -311,7 +313,7 @@ class SessionStore:
         ):
             if not line.strip():
                 continue
-            metadata: dict[str, Any] = _parse_jsonl_record(self.index_path, line_number, line)
+            metadata: dict[str, Any] = parse_jsonl_record(self.index_path, line_number, line)
             session_id = metadata.get("session_id")
             if not isinstance(session_id, str) or not session_id:
                 raise SessionStoreError(
@@ -349,22 +351,6 @@ def _new_session_id(created_at: datetime) -> str:
     return f"session-{timestamp}-{uuid4().hex[:8]}"
 
 
-def _parse_jsonl_record(path: Path, line_number: int, line: str) -> dict[str, Any]:
-    """将读取到的 metadata/message JSONL line 解析为 dict"""
-    try:
-        record = json.loads(line)
-    except json.JSONDecodeError as exc:
-        raise SessionStoreError(
-            f"Invalid JSONL record at {path}:{line_number}: {exc.msg}"
-        ) from exc
-
-    if not isinstance(record, dict):
-        raise SessionStoreError(
-            f"Invalid JSONL record at {path}:{line_number}: expected object."
-        )
-    return record
-
-
 def _is_safe_session_id(session_id: str) -> bool:
     """检查 session id 是否合法 (仅包含字母, 数字, - 和 _)"""
     return bool(session_id) and all(
@@ -388,32 +374,3 @@ def _summarize_content(content: Any, max_chars: int = 120) -> str:
         return ""
     collapsed = " ".join(content.split())
     return collapsed[:max_chars]
-
-
-def _summarize_turn(turn: dict[str, Any]) -> dict[str, Any]:
-    summary = {
-        "turn_id": turn.get("turn_id"),
-        "status": turn.get("status"),
-        "exit_reason": turn.get("exit_reason"),
-        "error": turn.get("error"),
-        "model_calls": int(turn.get("model_calls") or 0),
-        "tool_calls": int(turn.get("tool_calls") or 0),
-        "final_response": turn.get("final_response"),
-    }
-    if "model_usage" in turn:
-        summary["model_usage"] = turn.get("model_usage")
-    return summary
-
-
-def _summarize_compression(compression: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "compression_id": compression.get("compression_id"),
-        "scope": compression.get("scope"),
-        "covered_turn_ids": compression.get("covered_turn_ids"),
-        "summary": compression.get("summary"),
-        "source_message_count": int(compression.get("source_message_count") or 0),
-        "source_prompt_tokens": int(compression.get("source_prompt_tokens") or 0),
-        "summary_tokens": int(compression.get("summary_tokens") or 0),
-        "model": compression.get("model"),
-        "reason": compression.get("reason"),
-    }

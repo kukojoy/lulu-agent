@@ -11,7 +11,7 @@ ContextManager 执行逻辑
 
 from html import escape
 
-from lulu_agent.core.context_budget import (
+from lulu_agent.context.budget import (
     ContextBudget,
     ContextPlan,
     ContextPlanner,
@@ -20,6 +20,7 @@ from lulu_agent.core.context_budget import (
 from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.loader import SkillLoader
+from lulu_agent.runtime.compression import CompressionRecord
 
 
 class ContextManager:
@@ -185,19 +186,19 @@ class ContextManager:
             return []
 
         latest = turns[-1]
-        status = latest.get("status")
+        status = latest.status
         if status not in {"interrupted", "failed"}:
             return []
 
-        exit_reason = latest.get("exit_reason") or "unknown_error"
-        error = latest.get("error") or ""
+        exit_reason = latest.exit_reason or "unknown_error"
+        error = latest.error or ""
         content = "\n".join(
             [
                 "The previous agent turn ended abnormally.",
                 f"status: {status}",
                 f"exit_reason: {exit_reason}",
-                f"model_calls: {latest.get('model_calls', 0)}",
-                f"tool_calls: {latest.get('tool_calls', 0)}",
+                f"model_calls: {latest.model_calls}",
+                f"tool_calls: {latest.tool_calls}",
                 f"error: {error}" if error else "error: none",
                 "",
                 "Do not assume the previous turn completed successfully. If the previous turn may have changed files, run commands, or used tools, inspect the relevant state before continuing.",
@@ -212,68 +213,46 @@ class ContextManager:
 
     def _build_turn_context_messages(self, non_system_messages: list[dict]) -> list[dict]:
         """按 turn 顺序组装压缩摘要和未压缩 raw messages"""
-        groups, _ = group_messages_by_turn(non_system_messages)
+        groups = group_messages_by_turn(non_system_messages)
         compression_by_turn_id = self._compression_by_turn_id()
         emitted_compression_ids: set[str] = set()
-        context_messages = self._unassigned_messages(non_system_messages)
+        context_messages = []
 
         for group in groups:
             compression = compression_by_turn_id.get(group.turn_id)
             if compression:
-                compression_id = str(compression.get("compression_id") or "")
+                compression_id = compression.compression_id
                 if compression_id not in emitted_compression_ids:
-                    message = self._compression_message(compression)
-                    if message:
-                        context_messages.append(message)
-                    else:
-                        context_messages.extend(group.messages)
-                        continue
-                    if compression_id:
-                        emitted_compression_ids.add(compression_id)
+                    context_messages.append(self._compression_message(compression))
+                    emitted_compression_ids.add(compression_id)
                 continue
             context_messages.extend(group.messages)
         return context_messages
 
-    def _unassigned_messages(self, non_system_messages: list[dict]) -> list[dict]:
-        """保留还没有 turn_id 的历史消息, 避免兼容旧 session 时丢上下文"""
-        messages = []
-        for message in non_system_messages:
-            turn_id = message.get("turn_id")
-            if not isinstance(turn_id, str) or not turn_id:
-                messages.append(message)
-        return messages
-
-    def _compression_by_turn_id(self) -> dict[str, dict]:
+    def _compression_by_turn_id(self) -> dict[str, CompressionRecord]:
         """获取每个 turn_id 对应的最新 compression record"""
-        result: dict[str, dict] = {} # turn_id -> compression
+        result: dict[str, CompressionRecord] = {}
         for compression in self._session_compressions():
-            turn_ids = compression.get("covered_turn_ids")
-            if not isinstance(turn_ids, list):
-                continue
-            for turn_id in turn_ids:
-                if isinstance(turn_id, str) and turn_id:
-                    result[turn_id] = compression # 新记录会覆盖旧记录
+            for turn_id in compression.covered_turn_ids:
+                result[turn_id] = compression # 新记录会覆盖旧记录
         return result
 
-    def _compression_message(self, compression: dict) -> dict | None:
+    def _compression_message(self, compression: CompressionRecord) -> dict:
         """将 compression record 转成临时 api context message"""
-        summary = compression.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
-            return None
-        covered = ", ".join(compression.get("covered_turn_ids") or [])
+        covered = ", ".join(compression.covered_turn_ids)
         lines = [
             "Compressed summary of earlier conversation turns.",
-            f"covered_turn_ids: {covered}" if covered else "covered_turn_ids: unknown",
-            f"scope: {compression.get('scope') or 'unknown'}",
+            f"covered_turn_ids: {covered}",
+            f"scope: {compression.scope}",
             "",
-            summary.strip(),
+            compression.summary.strip(),
         ]
         return {
             "role": "user",
             "content": "\n".join(lines),
         }
 
-    def _session_compressions(self) -> list[dict]:
+    def _session_compressions(self) -> list[CompressionRecord]:
         if not self.session_store or not self.session_id:
             return []
         return self.session_store.load_compressions(self.session_id)
