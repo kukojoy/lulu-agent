@@ -25,7 +25,7 @@ from lulu_agent.runtime.event_sinks import EventSink, CompositeEventSink, new_tu
 from lulu_agent.runtime.turn import TurnRuntime
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, create_tool_registry
-from lulu_agent.tools.runtime import ToolRuntime
+from lulu_agent.tools.runtime import ToolCall, ToolRuntime
 
 
 SYSTEM_PROMPT = """You are a local coding agent.
@@ -199,6 +199,7 @@ class AgentLoop:
             session_id=self.session_id,
         )
 
+    # === runtime 环境 context block 注入 ===  
     def _runtime_environment_context_block(self) -> dict:
         turn = self._active_turn()
         
@@ -340,7 +341,7 @@ class AgentLoop:
         )
         # === event emit and turn state update ===
 
-        result = self.tool_runtime.run(tool_call)
+        result = self.tool_runtime.run(self._tool_call_with_runtime_args(tool_call))
 
         # === event emit and turn state update ===
         self._emit(
@@ -366,6 +367,21 @@ class AgentLoop:
             "content": result.to_json(),
         }
 
+    def _tool_call_with_runtime_args(self, tool_call: ToolCall) -> ToolCall:
+        """必要时为特定工具添加 runtime 参数, 例如 session_store/session_id"""
+        if tool_call.tool_name != "task_state":
+            return tool_call
+        arguments = dict(tool_call.arguments)
+        arguments["_session_store"] = self.session_store
+        arguments["_session_id"] = self.session_id
+        return ToolCall(
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_call.tool_name,
+            arguments=arguments,
+            parse_error=tool_call.parse_error,
+        )
+
+    # === turn runtime ===
     def _finalize_turn(self, final_response: str = ""):
         turn = self._active_turn()
         turn_record = turn.to_record(final_response)

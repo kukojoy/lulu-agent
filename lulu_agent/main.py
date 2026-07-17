@@ -79,6 +79,7 @@ def format_session_inspection(summary: dict) -> str:
         f"Messages: {summary['message_count']}",
         f"Turns: {summary.get('turn_count', 0)}",
         f"Compressions: {summary.get('compression_count', 0)}",
+        f"Task states: {summary.get('task_state_count', 0)}",
         "Transcript summary:",
     ]
     for index, message in enumerate(summary["messages"], start=1):
@@ -112,6 +113,13 @@ def format_session_inspection(summary: dict) -> str:
                 f"summary_tokens={compression.get('summary_tokens', 0)}"
             )
             lines.append(f"{index}. {compression.get('compression_id')}: {detail}")
+    if summary.get("task_state"):
+        task_state = summary["task_state"]
+        lines.append("Task state:")
+        lines.append(f"Goal: {task_state.get('goal')}")
+        lines.append(f"Status: {task_state.get('status')}")
+        if task_state.get("next_action"):
+            lines.append(f"Next action: {task_state['next_action']}")
     return "\n".join(lines)
 
 

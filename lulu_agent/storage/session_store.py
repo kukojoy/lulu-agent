@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from lulu_agent.runtime.compression import CompressionRecord
+from lulu_agent.runtime.task_state import TaskState
 from lulu_agent.runtime.turn import TurnRecord
 from lulu_agent.storage.jsonl import parse_jsonl_record
 
@@ -214,6 +215,66 @@ class SessionStore:
             compressions.append(CompressionRecord.from_dict(compression))
         return compressions
 
+    def append_task_state(self, session_id: str, task_state: TaskState | None) -> dict[str, Any]:
+        """向指定 session 追加一条 task state 记录, 并更新 session metadata"""
+        self._ensure_root()
+        path = self._existing_session_path(session_id)
+        now = _utc_now()
+        metadata = self._get_latest_metadata_for_session(session_id)
+        metadata["updated_at"] = now.isoformat()
+
+        record = {
+            "type": "task_state",
+            "session_id": session_id,
+            "created_at": now.isoformat(),
+            "task_state": task_state.to_dict() if task_state is not None else None,
+        }
+
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False))
+            file.write("\n")
+            file.flush()
+
+        self.append_index(metadata)
+        return metadata
+
+    def load_task_states(self, session_id: str) -> list[TaskState | None]:
+        """加载指定 session 的所有 task state 记录"""
+        path = self._existing_session_path(session_id)
+        task_states: list[TaskState | None] = []
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            record = parse_jsonl_record(path, line_number, line)
+            if record.get("type") != "task_state":
+                continue
+            if record.get("session_id") != session_id:
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
+                )
+            task_state = record.get("task_state")
+            if task_state is None:
+                task_states.append(None)
+                continue
+            if not isinstance(task_state, dict):
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: task_state must be an object or null."
+                )
+            try:
+                task_states.append(TaskState.from_dict(task_state))
+            except ValueError as exc:
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: {exc}"
+                ) from exc
+        return task_states
+
+    def load_latest_task_state(self, session_id: str) -> TaskState | None:
+        """加载指定 session 的最新 task state"""
+        task_states = self.load_task_states(session_id)
+        if not task_states:
+            return None
+        return task_states[-1]
+
     def list_sessions(self, limit: int | None = None) -> list[dict[str, Any]]:
         """列出所有 session 的最新 metadata, 按 updated_at 降序排列
         Args:
@@ -238,6 +299,7 @@ class SessionStore:
         self.load_messages(session_id)
         self.load_turns(session_id)
         self.load_compressions(session_id)
+        self.load_task_states(session_id)
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         """获取指定 session 的 metadata, 消息数量和消息列表 (部分字段)"""
@@ -245,11 +307,15 @@ class SessionStore:
         messages = self.load_messages(session_id)
         turns = self.load_turns(session_id)
         compressions = self.load_compressions(session_id)
+        task_states = self.load_task_states(session_id)
+        latest_task_state = task_states[-1] if task_states else None
         return {
             "metadata": metadata,
             "message_count": len(messages),
             "turn_count": len(turns),
             "compression_count": len(compressions),
+            "task_state_count": len(task_states),
+            "task_state": latest_task_state.to_dict() if latest_task_state else None,
             "messages": [
                 {
                     "role": message.get("role"),

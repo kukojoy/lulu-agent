@@ -124,6 +124,7 @@ class ContextManager:
             *self.context_blocks,
             *self._memory_context_blocks(),
             *self._skill_context_blocks(),
+            *self._task_state_context_blocks(),
             *self._turn_context_blocks(),
             *(context_blocks or []),
         ]
@@ -210,6 +211,37 @@ class ContextManager:
                 "content": content,
             }
         ]
+
+    def _task_state_context_blocks(self) -> list[dict]:
+        """从 session 读取当前任务状态, 生成 task state context block"""
+        if not self.session_store or not self.session_id:
+            return []
+
+        task_state = self.session_store.load_latest_task_state(self.session_id)
+        if not task_state or not task_state.should_inject():
+            return []
+
+        lines = [
+            "Current task state:",
+            f"goal: {task_state.goal}",
+            f"status: {task_state.status}",
+        ]
+        if task_state.steps:
+            lines.append("steps:")
+            for step in task_state.steps:
+                lines.append(f"- {step.id}. [{step.status}] {step.step}")
+        if task_state.blockers:
+            lines.append("blockers:")
+            for blocker in task_state.blockers:
+                lines.append(f"- {blocker}")
+        if task_state.verified:
+            lines.append("verified:")
+            for item in task_state.verified:
+                lines.append(f"- {item}")
+        if task_state.next_action:
+            lines.append(f"next_action: {task_state.next_action}")
+
+        return [{"name": "task_state", "content": "\n".join(lines)}]
 
     def _build_turn_context_messages(self, non_system_messages: list[dict]) -> list[dict]:
         """按 turn 顺序组装压缩摘要和未压缩 raw messages"""
