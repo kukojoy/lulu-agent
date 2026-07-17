@@ -105,6 +105,9 @@ class ToolResultPayload:
     ok: bool
     output: Any = None
     error: str | None = None
+    error_type: str | None = None
+    metadata: dict[str, Any] | None = None
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -219,6 +222,9 @@ class EventPayloadBuilder:
         ok: bool,
         output: Any = None,
         error: str | None = None,
+        error_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        truncated: bool = False,
     ) -> dict[str, Any]:
         return payload_to_dict(
             ToolResultPayload(
@@ -227,6 +233,9 @@ class EventPayloadBuilder:
                 ok=ok,
                 output=output,
                 error=error,
+                error_type=error_type,
+                metadata=metadata,
+                truncated=truncated,
             )
         )
 

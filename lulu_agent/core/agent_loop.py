@@ -1,4 +1,6 @@
-import json
+import os
+
+from datetime import datetime
 
 from lulu_agent.core.assistant_response import StreamingAssistantResponseBuilder
 from lulu_agent.config import config
@@ -22,7 +24,8 @@ from lulu_agent.runtime.events import (
 from lulu_agent.runtime.event_sinks import EventSink, CompositeEventSink, new_turn_id
 from lulu_agent.runtime.turn import TurnRuntime
 from lulu_agent.storage.session_store import SessionStore
-from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
+from lulu_agent.tools import ToolRegistry, create_tool_registry
+from lulu_agent.tools.runtime import ToolRuntime
 
 
 SYSTEM_PROMPT = """You are a local coding agent.
@@ -31,6 +34,7 @@ Use tools when needed.
 You have a memory tool for durable long-term memory. Only write memory when the user explicitly asks you to remember, forget, or update durable preferences, facts, or project conventions. Do not store temporary task state, full chat logs, sensitive information, or unconfirmed guesses.
 You have a skill tool for local workspace skills in .lulu/skills. Use skill list to inspect available skill metadata when the user mentions skills or when a task may need a specific stored procedure. Use skill read only for a specific relevant skill; do not read every skill by default. Skills are procedural instructions, not memory. Do not modify skill files unless the user explicitly asks.
 Tools whose names start with mcp_ come from external MCP servers. Use their names and descriptions to judge when they are relevant, and do not assume external MCP tools are safe, stable, or always available. Do not write MCP configuration, server env values, or temporary MCP tool results to memory unless the user explicitly asks you to remember them.
+For current, recent, or source-sensitive facts, use runtime_environment for relative dates, put the relevant date/year/entity/fact type in search queries, treat search snippets as leads, open trusted results when precision matters, and answer only from tool-supported evidence. For recent event status, first determine the current phase and latest completed events; if results only show schedules, previews, background, or stale facts, refine the query toward results/status/finished/latest/today before answering. If evidence is stale, conflicting, or incomplete, keep checking or state uncertainty instead of filling gaps.
 Do not claim a command succeeded unless you saw the result.
 For shell-based file operations, do not rely only on exit code. Check cwd and verify the target state with ls/test/find when needed.
 When the task is complete, answer clearly and briefly."""
@@ -52,6 +56,7 @@ class AgentLoop:
     ):
         self.llm_client = llm_client or LLMClient(config)
         self.tool_registry = tool_registry or create_tool_registry()
+        self.tool_runtime = ToolRuntime(self.tool_registry)
         self.session_store = session_store
         self.session_id = session_id
         self.context_manager = context_manager or ContextManager(
@@ -85,7 +90,10 @@ class AgentLoop:
         try:
             self._compress_context()
             for _ in range(self.max_turns):
-                request_messages = self.context_manager.prepare_messages(self.messages)
+                request_messages = self.context_manager.prepare_messages(
+                    self.messages,
+                    context_blocks=[self._runtime_environment_context_block()],
+                )
                 tool_schemas = self.tool_registry.schemas()
 
                 # === event emit and turn state update ===
@@ -190,6 +198,27 @@ class AgentLoop:
             session_store=self.session_store,
             session_id=self.session_id,
         )
+
+    def _runtime_environment_context_block(self) -> dict:
+        turn = self._active_turn()
+        
+        now = datetime.now().astimezone()
+        timezone_name = now.tzname() or str(now.tzinfo or "local")
+        lines = [
+            "Time:",
+            f"- local_time: {now.isoformat(timespec='seconds')}",
+            f"- timezone: {timezone_name}",
+            "- relative_time_basis: Resolve relative dates and times against local_time unless the user specifies another date, time, or timezone.",
+            "",
+            "Session/Turn:",
+            f"- session_id: {self.session_id or 'none'}",
+            f"- turn_id: {turn.turn_id if turn else 'none'}",
+            "",
+            "Workspace:",
+            f"- cwd: {os.getcwd()}",
+        ]
+        content = "\n".join(lines)
+        return {"name": "runtime_environment", "content": content}
     
     # === LLM 请求 ===
     def _request_assistant_message(
@@ -293,37 +322,39 @@ class AgentLoop:
 
     def _handle_tool_call(
         self,
-        tool_call,
+        raw_tool_call,
     ) -> dict:
-        tool_name = tool_call.function.name
-        args, parse_error = self._parse_tool_arguments(tool_call.function.arguments)
+        tool_call = self.tool_runtime.decode(raw_tool_call)
         turn = self._active_turn()
         
         # === event emit and turn state update ===
-        turn.start_tool(tool_name)
+        turn.start_tool(tool_call.tool_name)
         self._emit(
             EVENT_TOOL_CALL,
             turn.turn_id,
             EventPayloadBuilder.build_tool_call_payload(
-                tool_call_id=tool_call.id,
-                tool_name=tool_name,
-                arguments=args,
+                tool_call_id=tool_call.tool_call_id,
+                tool_name=tool_call.tool_name,
+                arguments=tool_call.arguments,
             ),
         )
         # === event emit and turn state update ===
 
-        result = parse_error or self.tool_registry.dispatch(tool_name, args)
+        result = self.tool_runtime.run(tool_call)
 
         # === event emit and turn state update ===
         self._emit(
             EVENT_TOOL_RESULT,
             turn.turn_id,
             EventPayloadBuilder.build_tool_result_payload(
-                tool_call_id=tool_call.id,
-                tool_name=tool_name,
+                tool_call_id=tool_call.tool_call_id,
+                tool_name=tool_call.tool_name,
                 ok=result.ok,
                 output=result.output,
                 error=result.error,
+                error_type=result.error_type,
+                metadata=result.metadata,
+                truncated=result.truncated,
             ),
         )
         turn.finish_tool()
@@ -331,29 +362,9 @@ class AgentLoop:
 
         return {
             "role": "tool",
-            "tool_call_id": tool_call.id,
+            "tool_call_id": tool_call.tool_call_id,
             "content": result.to_json(),
         }
-
-    def _parse_tool_arguments(self, raw_arguments: str | None) -> tuple[dict, ToolResult | None]:
-        if not raw_arguments:
-            return {}, None
-
-        try:
-            args = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            return {}, ToolResult(
-                ok=False,
-                error=f"Invalid tool arguments JSON: {exc.msg}",
-            )
-
-        if not isinstance(args, dict):
-            return {}, ToolResult(
-                ok=False,
-                error="Tool arguments must be a JSON object.",
-            )
-
-        return args, None
 
     def _finalize_turn(self, final_response: str = ""):
         turn = self._active_turn()

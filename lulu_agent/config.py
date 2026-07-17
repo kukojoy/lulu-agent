@@ -12,16 +12,20 @@ class ConfigError(RuntimeError):
 
 @dataclass
 class Config:
+    # 模型服务 (required)
     openai_base_url: str
     openai_api_key: str
     openai_model: str
 
+    # 网络搜索服务 (optional)
+    tavily_api_key: str
 
 def load_config() -> Config:
     return Config(
         openai_api_key=os.getenv("OPENAI_API_KEY") or "",
         openai_base_url=os.getenv("OPENAI_BASE_URL") or "",
         openai_model=os.getenv("OPENAI_MODEL") or "",
+        tavily_api_key=os.getenv("TAVILY_API_KEY") or "",
     )
 
 

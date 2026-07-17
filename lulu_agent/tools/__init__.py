@@ -1,12 +1,13 @@
 from lulu_agent.tools.registry import (
-    Tool,
     ToolRegistry,
-    ToolResult,
     create_tool_registry,
-    tool,
-    truncate_text,
-    validate_tool_args,
 )
+from lulu_agent.tools.tool import (
+    Tool,
+    ToolResult,
+    tool,
+)
+from lulu_agent.tools.utils import truncate_text
 
 __all__ = [
     "Tool",
@@ -15,5 +16,4 @@ __all__ = [
     "create_tool_registry",
     "tool",
     "truncate_text",
-    "validate_tool_args",
 ]

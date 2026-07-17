@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from lulu_agent.mcp.client import MCPClient
 from lulu_agent.tools import Tool, ToolResult
+from lulu_agent.tools.runtime import ERROR_EXTERNAL_TOOL
 
 
 MCP_TOOL_NAME_PREFIX = "mcp"
@@ -88,12 +89,17 @@ def _make_handler(client: MCPClient, raw_tool_name: str) -> Callable[[dict[str, 
     def handler(args: dict[str, Any]) -> ToolResult:
         result = client.call_tool(raw_tool_name, args)
         if not result.ok:
-            return ToolResult(ok=False, error=result.error)
+            return ToolResult(
+                ok=False,
+                error=result.error,
+                error_type=ERROR_EXTERNAL_TOOL,
+            )
         if _is_mcp_error_result(result.output):
             return ToolResult(
                 ok=False,
                 output=result.output,
                 error=_extract_mcp_error_text(result.output),
+                error_type=ERROR_EXTERNAL_TOOL,
             )
         return ToolResult(ok=True, output=result.output)
 

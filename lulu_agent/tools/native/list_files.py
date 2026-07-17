@@ -5,6 +5,18 @@ from lulu_agent.tools import ToolResult, tool
 
 
 DEFAULT_MAX_ENTRIES = 100
+SKIP_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "dist",
+    "node_modules",
+}
 
 
 @tool(
@@ -28,6 +40,10 @@ DEFAULT_MAX_ENTRIES = 100
                 "type": "boolean",
                 "description": "Whether to include files and directories whose names start with '.'.",
             },
+            "pattern": {
+                "type": "string",
+                "description": "Optional glob pattern to filter entries by name or relative path, such as '*.py', '**/*.md', or '*config*'.",
+            },
             "max_entries": {
                 "type": "integer",
                 "description": "Maximum number of entries to return.",
@@ -43,28 +59,44 @@ def list_files(args):
 
     recursive = args.get("recursive", False)
     include_hidden = args.get("include_hidden", False)
+    pattern = args.get("pattern")
     max_entries = args.get("max_entries", DEFAULT_MAX_ENTRIES)
 
-    if max_entries < 1:
+    if not isinstance(recursive, bool):
+        return ToolResult(ok=False, error="recursive must be a boolean.")
+    if not isinstance(include_hidden, bool):
+        return ToolResult(ok=False, error="include_hidden must be a boolean.")
+    if pattern is not None and not isinstance(pattern, str):
+        return ToolResult(ok=False, error="pattern must be a string.")
+    if isinstance(pattern, str) and not pattern.strip():
+        pattern = None
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool) or max_entries < 1:
         return ToolResult(ok=False, error="max_entries must be at least 1.")
 
     if not path.exists():
         return ToolResult(ok=False, error=f"Path not found: {path}")
 
     try:
-        entries = _collect_entries(path, recursive, include_hidden, max_entries)
+        entries, truncated = _collect_entries(path, recursive, include_hidden, pattern, max_entries)
     except OSError as exc:
         return ToolResult(ok=False, error=f"Failed to list path {path}: {exc}")
 
+    output = {
+        "path": str(path),
+        "recursive": recursive,
+        "entries": entries,
+        "returned_count": len(entries),
+        "truncated": truncated,
+    }
+    if pattern is not None:
+        output["pattern"] = pattern
+    if truncated:
+        output["hint"] = "Narrow pattern or path, or increase max_entries to see more results."
+
     return ToolResult(
         ok=True,
-        output={
-            "path": str(path),
-            "recursive": recursive,
-            "entries": entries,
-            "returned_count": len(entries),
-            "truncated": _is_truncated(path, recursive, include_hidden, len(entries), max_entries),
-        },
+        output=output,
+        truncated=truncated,
     )
 
 
@@ -72,22 +104,38 @@ def _collect_entries(
     path: Path,
     recursive: bool,
     include_hidden: bool,
+    pattern: str | None,
     max_entries: int,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     if path.is_file():
-        return [_entry_for_path(path)]
+        entries = [_entry_for_path(path)] if _matches_pattern(path, path.parent, pattern) else []
+        return entries, False
     if not path.is_dir():
-        return [_entry_for_path(path)]
+        entries = [_entry_for_path(path)] if _matches_pattern(path, path.parent, pattern) else []
+        return entries, False
 
-    iterator = path.rglob("*") if recursive else path.iterdir()
+    iterator = _iter_children(path, recursive)
     entries = []
     for child in sorted(iterator, key=_sort_key):
         if not include_hidden and _is_hidden_relative_to(child, path):
             continue
+        if not _matches_pattern(child, path, pattern):
+            continue
         entries.append(_entry_for_path(child))
-        if len(entries) >= max_entries:
+        if len(entries) > max_entries:
             break
-    return entries
+    return entries[:max_entries], len(entries) > max_entries
+
+
+def _iter_children(path: Path, recursive: bool):
+    if not recursive:
+        yield from path.iterdir()
+        return
+
+    for child in path.rglob("*"):
+        if any(part in SKIP_DIR_NAMES for part in _relative_parts(child, path)):
+            continue
+        yield child
 
 
 def _entry_for_path(path: Path) -> dict:
@@ -114,31 +162,26 @@ def _sort_key(path: Path) -> tuple[int, str]:
 
 
 def _is_hidden_relative_to(path: Path, root: Path) -> bool:
+    return any(part.startswith(".") for part in _relative_parts(path, root))
+
+
+def _relative_parts(path: Path, root: Path) -> tuple[str, ...]:
     try:
-        relative_parts = path.relative_to(root).parts
+        return path.relative_to(root).parts
     except ValueError:
-        relative_parts = path.parts
-    return any(part.startswith(".") for part in relative_parts)
+        return path.parts
 
 
-def _is_truncated(
-    path: Path,
-    recursive: bool,
-    include_hidden: bool,
-    returned_count: int,
-    max_entries: int,
-) -> bool:
-    if returned_count < max_entries:
+def _matches_pattern(path: Path, root: Path, pattern: str | None) -> bool:
+    if pattern is None:
+        return True
+    relative = path.relative_to(root).as_posix() if _is_relative_to(path, root) else path.name
+    return path.name == pattern or path.name.lower() == pattern.lower() or path.match(pattern) or Path(relative).match(pattern)
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
         return False
-    if path.is_file() or not path.is_dir():
-        return False
-
-    iterator = path.rglob("*") if recursive else path.iterdir()
-    seen = 0
-    for child in iterator:
-        if not include_hidden and _is_hidden_relative_to(child, path):
-            continue
-        seen += 1
-        if seen > returned_count:
-            return True
-    return False
