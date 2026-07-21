@@ -122,7 +122,8 @@ class ContextManager:
         """将 context blocks 渲染成可合并到 system msg 的文本"""
         blocks = [
             *self.context_blocks,
-            *self._memory_context_blocks(),
+            *self._global_memory_context_blocks(),
+            *self._project_guidance_context_blocks(),
             *self._skill_context_blocks(),
             *self._task_state_context_blocks(),
             *self._turn_context_blocks(),
@@ -145,11 +146,24 @@ class ContextManager:
             ]
         )
 
-    def _memory_context_blocks(self) -> list[dict]:
-        """从 memory store 读取 memory context block"""
-        snapshot = self.memory_store.read_snapshot()
+    def _global_memory_context_blocks(self) -> list[dict]:
+        """从 memory store 读取 global memory context block"""
+        snapshot = self.memory_store.read_global_memory_snapshot()
         block = snapshot.to_context_block()
         return [block] if block else []
+
+    def _project_guidance_context_blocks(self) -> list[dict]:
+        """从 memory store 读取 project guidance, 生成项目说明 context block"""
+        content = self.memory_store.read_project_guidance()
+        if not content:
+            return []
+
+        return [
+            {
+                "name": "project_guidance",
+                "content": content,
+            }
+        ]
 
     def _skill_context_blocks(self) -> list[dict]:
         """从 skill loader 读取 skill metadata context block"""

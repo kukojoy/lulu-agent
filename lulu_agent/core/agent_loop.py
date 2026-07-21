@@ -1,4 +1,5 @@
 import os
+import threading
 
 from datetime import datetime
 
@@ -21,7 +22,7 @@ from lulu_agent.runtime.events import (
     EventPayloadBuilder,
     RuntimeEvent,
 )
-from lulu_agent.runtime.event_sinks import EventSink, CompositeEventSink, new_turn_id
+from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
 from lulu_agent.runtime.turn import TurnRuntime
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, create_tool_registry
@@ -31,7 +32,7 @@ from lulu_agent.tools.runtime import ToolCall, ToolRuntime
 SYSTEM_PROMPT = """You are a local coding agent.
 You can use tools to inspect files, write files, and run shell commands.
 Use tools when needed.
-You have a memory tool for durable long-term memory. Only write memory when the user explicitly asks you to remember, forget, or update durable preferences, facts, or project conventions. Do not store temporary task state, full chat logs, sensitive information, or unconfirmed guesses.
+You have a memory tool for durable global long-term memory. Only write memory when the user explicitly asks you to remember, forget, or update durable cross-project preferences, facts, or habits. Do not store project instructions, temporary task state, full chat logs, sensitive information, or unconfirmed guesses. Project instructions belong in AGENTS.md and are injected separately when present.
 You have a skill tool for local workspace skills in .lulu/skills. Use skill list to inspect available skill metadata when the user mentions skills or when a task may need a specific stored procedure. Use skill read only for a specific relevant skill; do not read every skill by default. Skills are procedural instructions, not memory. Do not modify skill files unless the user explicitly asks.
 Tools whose names start with mcp_ come from external MCP servers. Use their names and descriptions to judge when they are relevant, and do not assume external MCP tools are safe, stable, or always available. Do not write MCP configuration, server env values, or temporary MCP tool results to memory unless the user explicitly asks you to remember them.
 For current, recent, or source-sensitive facts, use runtime_environment for relative dates, put the relevant date/year/entity/fact type in search queries, treat search snippets as leads, open trusted results when precision matters, and answer only from tool-supported evidence. For recent event status, first determine the current phase and latest completed events; if results only show schedules, previews, background, or stale facts, refine the query toward results/status/finished/latest/today before answering. If evidence is stale, conflicting, or incomplete, keep checking or state uncertainty instead of filling gaps.
@@ -52,6 +53,7 @@ class AgentLoop:
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         event_sink: EventSink | None = None,
+        memory_reviewer=None,  # lulu_agent.memory.review.MemoryReviewer (NOTE: 此注释是为了防止循环 import)
         max_turns: int = 30,
     ):
         self.llm_client = llm_client or LLMClient(config)
@@ -64,7 +66,9 @@ class AgentLoop:
             session_store=session_store,
             session_id=session_id,
         )
-        self.event_sink = event_sink or CompositeEventSink()
+        self.event_sink = event_sink or NoopEventSink()
+        self.memory_reviewer = memory_reviewer
+        self._turns_since_memory_review = 0
         self.max_turns = max_turns
         self.messages = self._load_or_initialize_messages()
         self.current_turn: TurnRuntime | None = None
@@ -387,6 +391,7 @@ class AgentLoop:
         turn_record = turn.to_record(final_response)
         if self.session_store and self.session_id:
             self.session_store.append_turn(self.session_id, turn_record)
+        self._review_memory(turn_record)
         self._emit(
             EVENT_TURN_END,
             turn.turn_id,
@@ -400,6 +405,30 @@ class AgentLoop:
         )
         self.current_turn = None
         return turn_record
+
+    def _review_memory(self, turn_record) -> None:
+        """成功 turn 结束后启动后台 memory review, 不污染主链路"""
+        if not self.memory_reviewer:
+            return
+        if turn_record.status != "completed" or not turn_record.final_response:
+            return
+        if self.memory_reviewer.review_turns < 1:
+            return
+
+        self._turns_since_memory_review += 1
+        if self._turns_since_memory_review < self.memory_reviewer.review_turns:
+            return
+        self._turns_since_memory_review = 0
+
+        messages_snapshot = [dict(message) for message in self.messages]
+
+        def target():
+            try:
+                self.memory_reviewer.review(messages_snapshot)
+            except Exception:
+                pass
+
+        threading.Thread(target=target, daemon=True, name="memory-review").start()
 
     def _error_exit_reason(self):
         turn = self._active_turn()
