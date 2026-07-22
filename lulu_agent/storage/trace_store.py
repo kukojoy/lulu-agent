@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +21,12 @@ class TraceStore:
     def append_event(self, session_id: str, event: RuntimeEvent) -> dict[str, Any]:
         self._ensure_root()
         path = self._trace_path(session_id)
+        now = _local_now()
         record = {
             "type": "event",
             "session_id": session_id,
             "turn_id": event.turn_id,
-            "created_at": _utc_now().isoformat(),
+            "created_at": now.isoformat(),
             "event_type": event.type,
             "timestamp": event.timestamp,
             "payload": event.payload,
@@ -67,8 +68,8 @@ class TraceStore:
         return self.root / f"{session_id}.jsonl"
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
 
 
 def _validate_trace_record(

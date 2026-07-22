@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal
 
 
@@ -36,12 +36,12 @@ class RuntimeEvent:
         type: 事件类型
         turn_id: 对话轮次 ID, agent loop 每次 run 都会生成一个新的 turn_id
         payload: 事件载荷 (主体数据)
-        timestamp: 事件发生时间戳 (UTC 时间)
+        timestamp: 事件发生时间戳 (本地时区)
     """
     type: RuntimeEventType
     turn_id: str
     payload: dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now().astimezone().isoformat())
 
     def to_dict(self) -> dict[str, Any]:
         return {

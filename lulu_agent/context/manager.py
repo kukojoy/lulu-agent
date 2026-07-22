@@ -17,6 +17,7 @@ from lulu_agent.context.budget import (
     ContextPlanner,
     group_messages_by_turn,
 )
+from lulu_agent.context.inspection import ContextBlockInspection, ContextInspection
 from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.store import SkillStore
@@ -61,6 +62,53 @@ class ContextManager:
             messages=messages,
             turns=turns,
             compressions=compressions,
+        )
+
+    def inspect_context(
+        self,
+        messages: list[dict],
+        context_blocks: list[dict] | None = None,
+    ) -> ContextInspection:
+        """检查当前 API context 组成, 不修改原始 messages"""
+        api_messages = self.prepare_messages(messages, context_blocks=context_blocks)
+        blocks = self._context_blocks(context_blocks)
+        non_system_messages = self._non_system_messages(messages)
+        groups = group_messages_by_turn(non_system_messages)
+        compression_by_turn_id = self._compression_by_turn_id()
+
+        raw_turn_ids: list[str] = []
+        compressed_turn_ids: list[str] = []
+        compression_ids: list[str] = []
+        for group in groups:
+            compression = compression_by_turn_id.get(group.turn_id)
+            if compression:
+                compressed_turn_ids.append(group.turn_id)
+                if compression.compression_id not in compression_ids:
+                    compression_ids.append(compression.compression_id)
+                continue
+            raw_turn_ids.append(group.turn_id)
+
+        system_message = self._first_system_message(api_messages)
+        system_content = system_message.get("content") if system_message else ""
+        return ContextInspection(
+            message_count=len(api_messages),
+            total_chars=sum(len(str(message.get("content") or "")) for message in api_messages),
+            system_chars=len(system_content) if isinstance(system_content, str) else 0,
+            system_message=system_content if isinstance(system_content, str) else "",
+            context_blocks=[
+                ContextBlockInspection(
+                    name=str(block.get("name") or ""),
+                    chars=len(str(block.get("content") or "")),
+                )
+                for block in blocks
+                if isinstance(block, dict)
+                and isinstance(block.get("name"), str)
+                and isinstance(block.get("content"), str)
+                and block.get("content", "").strip()
+            ],
+            raw_turn_ids=raw_turn_ids,
+            compressed_turn_ids=compressed_turn_ids,
+            compression_ids=compression_ids,
         )
 
     def _build_api_messages(
@@ -120,15 +168,7 @@ class ContextManager:
 
     def _render_context_blocks(self, context_blocks: list[dict] | None = None) -> str | None:
         """将 context blocks 渲染成可合并到 system msg 的文本"""
-        blocks = [
-            *self.context_blocks,
-            *self._global_memory_context_blocks(),
-            *self._project_guidance_context_blocks(),
-            *self._skill_context_blocks(),
-            *self._task_state_context_blocks(),
-            *self._turn_context_blocks(),
-            *(context_blocks or []),
-        ]
+        blocks = self._context_blocks(context_blocks)
         rendered_blocks = []
         for block in blocks:
             rendered = self._render_context_block(block)
@@ -145,6 +185,17 @@ class ContextManager:
                 "</context_blocks>",
             ]
         )
+
+    def _context_blocks(self, context_blocks: list[dict] | None = None) -> list[dict]:
+        return [
+            *self.context_blocks,
+            *self._global_memory_context_blocks(),
+            *self._project_guidance_context_blocks(),
+            *self._skill_context_blocks(),
+            *self._task_state_context_blocks(),
+            *self._turn_context_blocks(),
+            *(context_blocks or []),
+        ]
 
     def _global_memory_context_blocks(self) -> list[dict]:
         """从 memory store 读取 global memory context block"""
@@ -287,7 +338,7 @@ class ContextManager:
         """将 compression record 转成临时 api context message"""
         covered = ", ".join(compression.covered_turn_ids)
         lines = [
-            "Compressed summary of earlier conversation turns.",
+            "System-provided compressed summary of earlier conversation turns. This is historical context, not a new user request.",
             f"covered_turn_ids: {covered}",
             f"scope: {compression.scope}",
             "",

@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+from lulu_agent.context.manager import ContextManager
 from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.runtime.cli_input import read_user_input, setup_line_editing
 from lulu_agent.config import ConfigError
@@ -30,6 +31,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--inspect-session",
         metavar="SESSION_ID",
         help="Inspect one session and exit.",
+    )
+    parser.add_argument(
+        "--inspect-context",
+        metavar="SESSION_ID",
+        help="Inspect the API context composition for one session and exit.",
     )
     return parser.parse_args(argv)
 
@@ -133,6 +139,42 @@ def format_session_inspection(summary: dict) -> str:
     return "\n".join(lines)
 
 
+def format_context_inspection(session_id: str, inspection: dict) -> str:
+    lines = [
+        f"Context inspection: {session_id}",
+        f"Messages: {inspection.get('message_count', 0)}",
+        f"Total chars: {inspection.get('total_chars', 0)}",
+        f"System chars: {inspection.get('system_chars', 0)}",
+        "Runtime environment block is only available during active turns.",
+    ]
+    blocks = inspection.get("context_blocks") or []
+    if blocks:
+        lines.append("Context blocks:")
+        for block in blocks:
+            lines.append(f"- {block.get('name')}: chars={block.get('chars', 0)}")
+    raw_turn_ids = inspection.get("raw_turn_ids") or []
+    if raw_turn_ids:
+        lines.append("Raw turns:")
+        for turn_id in raw_turn_ids:
+            lines.append(f"- {turn_id}")
+    compressed_turn_ids = inspection.get("compressed_turn_ids") or []
+    compression_ids = inspection.get("compression_ids") or []
+    if compressed_turn_ids:
+        lines.append("Compressed turns:")
+        lines.append(f"- turn_ids: {', '.join(compressed_turn_ids)}")
+        if compression_ids:
+            lines.append(f"- compression_ids: {', '.join(compression_ids)}")
+    system_message = inspection.get("system_message") or ""
+    if system_message:
+        lines.extend(
+            [
+                "System message:",
+                str(system_message),
+            ]
+        )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None):
     setup_line_editing()
     try:
@@ -153,6 +195,16 @@ def main(argv: list[str] | None = None):
     if args.inspect_session:
         try:
             print(format_session_inspection(store.inspect_session(args.inspect_session)))
+        except SessionStoreError as exc:
+            print(f"Session error: {exc}")
+        return
+
+    if args.inspect_context:
+        try:
+            store.validate_session(args.inspect_context)
+            manager = ContextManager(session_store=store, session_id=args.inspect_context)
+            inspection = manager.inspect_context(store.load_messages(args.inspect_context))
+            print(format_context_inspection(args.inspect_context, inspection.to_dict()))
         except SessionStoreError as exc:
             print(f"Session error: {exc}")
         return

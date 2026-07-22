@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -33,7 +33,7 @@ class SessionStore:
             dict[str, Any]: session metadata
         """
         self._ensure_root()
-        now = _utc_now()
+        now = _local_now()
         session_id = _new_session_id(now)
         metadata = {
             "session_id": session_id,
@@ -60,7 +60,7 @@ class SessionStore:
         """
         self._ensure_root()
         path = self._existing_session_path(session_id)
-        now = _utc_now()
+        now = _local_now()
         
         metadata = self._metadata_for_append(session_id, message, now)
 
@@ -129,7 +129,7 @@ class SessionStore:
         """向指定 session 追加一条 turn 摘要, 并更新 session metadata"""
         self._ensure_root()
         path = self._existing_session_path(session_id)
-        now = _utc_now()
+        now = _local_now()
         metadata = self._get_latest_metadata_for_session(session_id)
         metadata["updated_at"] = now.isoformat()
 
@@ -174,7 +174,7 @@ class SessionStore:
         """向指定 session 追加一条 compression 记录, 并更新 session metadata"""
         self._ensure_root()
         path = self._existing_session_path(session_id)
-        now = _utc_now()
+        now = _local_now()
         metadata = self._get_latest_metadata_for_session(session_id)
         metadata["updated_at"] = now.isoformat()
 
@@ -219,7 +219,7 @@ class SessionStore:
         """向指定 session 追加一条 task state 记录, 并更新 session metadata"""
         self._ensure_root()
         path = self._existing_session_path(session_id)
-        now = _utc_now()
+        now = _local_now()
         metadata = self._get_latest_metadata_for_session(session_id)
         metadata["updated_at"] = now.isoformat()
 
@@ -386,6 +386,7 @@ class SessionStore:
                     f"Invalid session index record at {self.index_path}:{line_number}: "
                     "session_id must be a non-empty string."
                 )
+            latest.pop(session_id, None)
             latest[session_id] = metadata
         return latest
 
@@ -406,9 +407,9 @@ class SessionStore:
         return path
 
 
-def _utc_now() -> datetime:
-    """获取当前 UTC 时间"""
-    return datetime.now(timezone.utc)
+def _local_now() -> datetime:
+    """获取当前本地时间"""
+    return datetime.now().astimezone()
 
 
 def _new_session_id(created_at: datetime) -> str:
