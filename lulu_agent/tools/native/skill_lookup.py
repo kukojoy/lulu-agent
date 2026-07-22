@@ -1,22 +1,23 @@
 from dataclasses import asdict
 
-from lulu_agent.skills.loader import SkillLoader, SkillLoaderError
+from lulu_agent.skills.store import SkillStoreError, SkillStore
 from lulu_agent.tools import ToolResult, tool
 
 
 @tool(
-    name="skill",
+    name="skill_lookup",
     description=(
-        "List or read local workspace skills from .lulu/skills. Use action=list "
-        "to inspect available skill metadata first. Use action=read only when "
-        "a specific skill is relevant or explicitly requested by the user. "
-        "Do not read every skill by default."
+        "List or read global skills from ~/.lulu/skills. Use action=list to "
+        "inspect available skill metadata first. Use action=read only when a "
+        "specific skill is relevant or explicitly requested by the user. Do "
+        "not read every skill by default."
     ),
     parameters={
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
+                "enum": ["list", "read"],
                 "description": "Skill action: list or read.",
             },
             "name": {
@@ -27,12 +28,12 @@ from lulu_agent.tools import ToolResult, tool
         "required": ["action"],
     },
 )
-def skill(args):
-    loader = SkillLoader()
+def skill_lookup(args):
+    store = SkillStore()
     action = args["action"]
 
     if action == "list":
-        result = loader.list_skills()
+        result = store.list_skills()
         return ToolResult(
             ok=True,
             output={
@@ -44,11 +45,16 @@ def skill(args):
 
     if action == "read":
         try:
-            document = loader.read_skill(args.get("name", ""))
-        except SkillLoaderError as exc:
+            document = store.read_skill(args.get("name", ""))
+        except SkillStoreError as exc:
             return ToolResult(ok=False, error=str(exc))
 
-        return ToolResult(ok=True, output=asdict(document))
+        return ToolResult(
+            ok=True,
+            output=document.to_dict(
+                ("name", "description", "path", "directory", "content")
+            ),
+        )
 
     return ToolResult(
         ok=False,

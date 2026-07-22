@@ -8,7 +8,7 @@ from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.tools import ToolRegistry
 from lulu_agent.tools.native.memory import memory
-from lulu_agent.skills.loader import SkillLoader
+from lulu_agent.skills.store import SkillStore
 
 
 MEMORY_REVIEW_PROMPT = """Audit and maintain global long-term memory using the recent conversation and existing memory.
@@ -50,8 +50,8 @@ class MemoryReviewer:
         self,
         llm_client: LLMClient | None = None,
         memory_store: MemoryStore | None = None,
-        max_turns: int = 8,
-        review_turns: int = 5,
+        max_turns: int = 20,
+        review_turns: int = 8,
     ):
         self.llm_client = llm_client
         self.memory_store = memory_store or MemoryStore()
@@ -65,7 +65,7 @@ class MemoryReviewer:
             tool_registry=_memory_only_registry(),
             context_manager=ContextManager(
                 memory_store=self.memory_store,
-                skill_loader=SkillLoader(".lulu/skills_empty"),  # NOTE: 需保证路径 ".lulu/skills_empty" 不存在或为空目录
+                skill_store=SkillStore(".lulu/skills_empty"),  # NOTE: 需保证路径 ".lulu/skills_empty" 不存在或为空目录
             ),
             max_turns=self.max_turns,
         )

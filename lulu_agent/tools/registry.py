@@ -28,7 +28,8 @@ def create_tool_registry() -> ToolRegistry:
     from lulu_agent.tools.native.replace_in_file import replace_in_file
     from lulu_agent.tools.native.run_shell import run_shell
     from lulu_agent.tools.native.search_text import search_text
-    from lulu_agent.tools.native.skill import skill
+    from lulu_agent.tools.native.skill_lookup import skill_lookup
+    from lulu_agent.tools.native.skill_manage import skill_manage
     from lulu_agent.tools.native.task_state import task_state
     from lulu_agent.tools.native.web_extract import web_extract
     from lulu_agent.tools.native.web_search import web_search
@@ -43,7 +44,8 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(search_text)
     registry.register(replace_in_file)
     registry.register(memory)
-    registry.register(skill)
+    registry.register(skill_lookup)
+    registry.register(skill_manage)
     registry.register(task_state)
 
     if config.tavily_api_key:

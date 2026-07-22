@@ -9,7 +9,9 @@ from lulu_agent.runtime.event_sinks import CliEventSink, CompositeEventSink, Per
 from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
 from lulu_agent.memory.review import MemoryReviewer
+from lulu_agent.skills.review import SkillReviewer
 from lulu_agent.config import config
+from lulu_agent.skills.utils import install_bundled_skills
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,7 +38,8 @@ def create_agent(
     args: argparse.Namespace,
     session_store: SessionStore | None = None,
     llm_client: LLMClient | None = None,
-    memory_reviewer: MemoryReviewer | None = None
+    memory_reviewer: MemoryReviewer | None = None,
+    skill_reviewer: SkillReviewer | None = None,
 ) -> tuple[AgentLoop, str]:
     store = session_store or SessionStore()
     if args.resume:
@@ -57,6 +60,7 @@ def create_agent(
             ]
         ),
         memory_reviewer=memory_reviewer,
+        skill_reviewer=skill_reviewer,
     ), session_id
 
 
@@ -131,10 +135,16 @@ def format_session_inspection(summary: dict) -> str:
 
 def main(argv: list[str] | None = None):
     setup_line_editing()
+    try:
+        install_bundled_skills()
+    except Exception as exc:
+        print(f"[Skill bootstrap warning] {exc}")
+        
     args = parse_args(argv)
     store = SessionStore()
     llm_client = LLMClient(config)
     memory_reviewer = MemoryReviewer(llm_client=llm_client)
+    skill_reviewer = SkillReviewer(llm_client=llm_client)
 
     if args.list_sessions:
         print(format_sessions(store.list_sessions(limit=20)))
@@ -148,7 +158,13 @@ def main(argv: list[str] | None = None):
         return
 
     try:
-        agent, session_id = create_agent(args, session_store=store, llm_client=llm_client, memory_reviewer=memory_reviewer)
+        agent, session_id = create_agent(
+            args,
+            session_store=store,
+            llm_client=llm_client,
+            memory_reviewer=memory_reviewer,
+            skill_reviewer=skill_reviewer,
+        )
     except ConfigError as exc:
         print(f"Config error: {exc}")
         return

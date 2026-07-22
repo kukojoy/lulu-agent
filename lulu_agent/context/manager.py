@@ -19,7 +19,7 @@ from lulu_agent.context.budget import (
 )
 from lulu_agent.storage.memory_store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
-from lulu_agent.skills.loader import SkillLoader
+from lulu_agent.skills.store import SkillStore
 from lulu_agent.runtime.compression import CompressionRecord
 
 
@@ -29,7 +29,7 @@ class ContextManager:
         max_messages: int = 40,
         context_blocks: list[dict] | None = None,
         memory_store: MemoryStore | None = None,
-        skill_loader: SkillLoader | None = None,
+        skill_store: SkillStore | None = None,
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         context_budget: ContextBudget | None = None,
@@ -39,7 +39,7 @@ class ContextManager:
         self.max_messages = max_messages
         self.context_blocks = list(context_blocks or [])
         self.memory_store = memory_store or MemoryStore()
-        self.skill_loader = skill_loader or SkillLoader()
+        self.skill_store = skill_store or SkillStore()
         self.session_store = session_store
         self.session_id = session_id
         self.context_planner = ContextPlanner(context_budget)
@@ -166,14 +166,14 @@ class ContextManager:
         ]
 
     def _skill_context_blocks(self) -> list[dict]:
-        """从 skill loader 读取 skill metadata context block"""
-        result = self.skill_loader.list_skills()
+        """从 skill store 读取 skill metadata context block"""
+        result = self.skill_store.list_skills()
         if not result.skills and not result.errors:
             return []
 
         lines = []
         if result.skills:
-            lines.append("Local workspace skills available in .lulu/skills:")
+            lines.append(f"Global skills available at {result.root}:")
         for skill in result.skills:
             lines.append(f"- {skill.name}: {skill.description} ({skill.path})")
 
