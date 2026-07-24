@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import threading
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.storage.trace_store import TraceStore
 
 
-class ServerSessionManager:
+class ServerRunner:
     def __init__(
         self,
         session_store: SessionStore | None = None,
@@ -41,12 +42,27 @@ class ServerSessionManager:
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         return self.session_service.list_sessions(limit=limit)
 
+    def resume_session(self, session_id: str) -> str:
+        return self.session_service.resume_session(session_id)
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        metadata = self.session_service.delete_session(session_id)
+        with self._lock:
+            self._agents.pop(session_id, None)
+            self._locks.pop(session_id, None)
+        return metadata
+
+    def subscribe_events(self, session_id: str) -> queue.Queue[dict[str, Any]]:
+        return self.event_hub.subscribe(session_id)
+
+    def unsubscribe_events(self, session_id: str, subscriber: queue.Queue[dict[str, Any]]) -> None:
+        self.event_hub.unsubscribe(session_id, subscriber)
+
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         return self.session_service.inspect_session(session_id)
 
     def load_messages(self, session_id: str) -> list[dict[str, Any]]:
-        self.session_service.resume_session(session_id)
-        return self.session_store.load_messages(session_id)
+        return self.session_service.load_messages(session_id)
 
     def inspect_context(self, session_id: str) -> dict[str, Any]:
         return self.session_service.inspect_context(session_id)

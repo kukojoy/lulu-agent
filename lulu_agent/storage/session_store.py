@@ -293,6 +293,14 @@ class SessionStore:
             return sessions
         return sessions[:limit]
 
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        """删除指定 session 文件, 并从 session index 中移除对应 metadata"""
+        metadata = self._get_latest_metadata_for_session(session_id)
+        path = self._existing_session_path(session_id)
+        path.unlink()
+        self._rewrite_index_without_session(session_id)
+        return metadata
+
     def validate_session(self, session_id: str) -> None:
         """验证指定 session 是否存在, 是否能正常加载 metadata, 消息和 turns"""
         self._get_latest_metadata_for_session(session_id)
@@ -389,6 +397,33 @@ class SessionStore:
             latest.pop(session_id, None)
             latest[session_id] = metadata
         return latest
+
+    def _rewrite_index_without_session(self, session_id: str) -> None:
+        """重写 session index 文件, 移除指定 session 的 metadata"""
+        if not self.index_path.exists():
+            return
+
+        kept_lines: list[str] = []
+        for line_number, line in enumerate(
+            self.index_path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            if not line.strip():
+                continue
+            metadata: dict[str, Any] = parse_jsonl_record(self.index_path, line_number, line)
+            record_session_id = metadata.get("session_id")
+            if not isinstance(record_session_id, str) or not record_session_id:
+                raise SessionStoreError(
+                    f"Invalid session index record at {self.index_path}:{line_number}: "
+                    "session_id must be a non-empty string."
+                )
+            if record_session_id != session_id:
+                kept_lines.append(json.dumps(metadata, ensure_ascii=False))
+
+        content = "\n".join(kept_lines)
+        if content:
+            content += "\n"
+        self.index_path.write_text(content, encoding="utf-8")
 
     def _ensure_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

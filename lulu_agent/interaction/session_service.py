@@ -16,8 +16,15 @@ class SessionInteractionService:
         self.session_store.validate_session(session_id)
         return session_id
 
+    def load_messages(self, session_id: str) -> list[dict[str, Any]]:
+        self.session_store.validate_session(session_id)
+        return self.session_store.load_messages(session_id)
+
     def list_sessions(self, limit: int | None = 20) -> list[dict[str, Any]]:
         return self.session_store.list_sessions(limit=limit)
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        return self.session_store.delete_session(session_id)
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         return self.session_store.inspect_session(session_id)
