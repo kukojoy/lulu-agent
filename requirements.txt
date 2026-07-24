@@ -1,3 +1,6 @@
 openai
 python-dotenv
 mcp
+fastapi
+uvicorn
+websockets
