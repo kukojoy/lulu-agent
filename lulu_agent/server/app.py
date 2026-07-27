@@ -5,7 +5,8 @@ import queue
 from typing import Any
 
 from lulu_agent.config import ConfigError
-from lulu_agent.server.runner import ServerRunner
+from lulu_agent.server.runner import ServerRunner, ServerRunnerError
+from lulu_agent.skills.store import SkillStoreError
 from lulu_agent.storage.session_store import SessionStoreError
 from lulu_agent.storage.trace_store import TraceStoreError
 
@@ -97,12 +98,36 @@ def create_app(runner: ServerRunner | None = None):
         except (SessionStoreError, TraceStoreError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/sessions/{session_id}/runtime")
+    def get_runtime_state(session_id: str) -> dict[str, Any]:
+        try:
+            return {"runtime": runner.get_runtime_state(session_id)}
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/memory")
+    def get_memory() -> dict[str, Any]:
+        return {"memory": runner.get_memory()}
+
+    @app.get("/skills")
+    def list_skills() -> dict[str, Any]:
+        return runner.list_skills()
+
+    @app.get("/skills/{name}")
+    def read_skill(name: str) -> dict[str, Any]:
+        try:
+            return {"skill": runner.read_skill(name)}
+        except SkillStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/sessions/{session_id}/messages")
     async def send_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
         try:
             return await asyncio.to_thread(runner.run_message, session_id, request.content)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ServerRunnerError as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc), "code": exc.code}) from exc
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ConfigError as exc:
@@ -119,21 +144,27 @@ def create_app(runner: ServerRunner | None = None):
                     "type": "server_error",
                     "turn_id": "",
                     "timestamp": "",
-                    "payload": {"message": f"Session not found: {session_id}"},
+                    "payload": {
+                        "message": f"Session not found: {session_id}",
+                        "code": "session_not_found",
+                    },
                 }
             )
             await websocket.close(code=1008)
             return
 
+        subscriber = runner.subscribe_events(session_id)
         await websocket.send_json(
             {
                 "type": "server_ready",
                 "turn_id": "",
                 "timestamp": "",
-                "payload": {"session_id": session_id},
+                "payload": {
+                    "session_id": session_id,
+                    "runtime": runner.get_runtime_state(session_id),
+                },
             }
         )
-        subscriber = runner.subscribe_events(session_id)
         try:
             while True:
                 try:
@@ -157,7 +188,10 @@ def create_app(runner: ServerRunner | None = None):
                     "type": "server_error",
                     "turn_id": "",
                     "timestamp": "",
-                    "payload": {"message": f"Session not found: {session_id}"},
+                    "payload": {
+                        "message": f"Session not found: {session_id}",
+                        "code": "session_not_found",
+                    },
                 }
             )
             await websocket.close(code=1008)
@@ -169,7 +203,10 @@ def create_app(runner: ServerRunner | None = None):
                 "type": "server_ready",
                 "turn_id": "",
                 "timestamp": "",
-                "payload": {"session_id": session_id},
+                "payload": {
+                    "session_id": session_id,
+                    "runtime": runner.get_runtime_state(session_id),
+                },
             }
         )
 
@@ -190,7 +227,10 @@ def create_app(runner: ServerRunner | None = None):
                             "type": "server_error",
                             "turn_id": "",
                             "timestamp": "",
-                            "payload": {"message": "Unsupported command type."},
+                            "payload": {
+                                "message": "Unsupported command type.",
+                                "code": "invalid_command",
+                            },
                         }
                     )
                     continue
@@ -198,12 +238,28 @@ def create_app(runner: ServerRunner | None = None):
                 try:
                     await asyncio.to_thread(runner.run_message, session_id, content)
                 except (ValueError, SessionStoreError, ConfigError) as exc:
+                    code = "server_error"
+                    if isinstance(exc, ValueError):
+                        code = "invalid_message"
+                    elif isinstance(exc, SessionStoreError):
+                        code = "session_not_found"
+                    elif isinstance(exc, ConfigError):
+                        code = "config_error"
                     await websocket.send_json(
                         {
                             "type": "server_error",
                             "turn_id": "",
                             "timestamp": "",
-                            "payload": {"message": str(exc)},
+                            "payload": {"message": str(exc), "code": code},
+                        }
+                    )
+                except ServerRunnerError as exc:
+                    await websocket.send_json(
+                        {
+                            "type": "server_error",
+                            "turn_id": "",
+                            "timestamp": "",
+                            "payload": {"message": str(exc), "code": exc.code},
                         }
                     )
 

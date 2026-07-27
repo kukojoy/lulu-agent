@@ -2,6 +2,8 @@ import {
   Activity,
   AlertCircle,
   Bot,
+  BookOpen,
+  Brain,
   ListTree,
   MessageSquarePlus,
   PanelLeftClose,
@@ -13,25 +15,35 @@ import {
   Trash2,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
   createSession,
   deleteSession,
+  getMemory,
+  getRuntimeState,
   getTaskState,
   inspectSession,
+  listSkills,
   listSessions,
   loadMessages,
   openRunSocket,
+  readSkill,
 } from "./api";
 import type {
   ChatItem,
+  MemoryView,
+  RuntimeState,
+  SkillDocument,
+  SkillListView,
   SessionInspection,
   SessionSummary,
   TaskState,
   ToolCallView,
   TranscriptMessage,
 } from "./types";
+
+type InspectorView = "task" | "memory" | "skills";
 
 function shortSessionId(sessionId: string): string {
   return sessionId.replace(/^session-/, "");
@@ -52,7 +64,10 @@ function parseJsonValue(value: unknown): unknown {
   }
 }
 
-function runtimeToolItem(event: { type: string; turn_id: string; payload: Record<string, unknown> }): ChatItem | null {
+function runtimeToolItem(
+  event: { type: string; turn_id: string; payload: Record<string, unknown> },
+  assistantContent = "",
+): ChatItem | null {
   const payload = event.payload;
   const toolCallId = String(payload.tool_call_id ?? "");
   const toolName = String(payload.tool_name ?? "tool");
@@ -61,7 +76,7 @@ function runtimeToolItem(event: { type: string; turn_id: string; payload: Record
       id: `live-${event.turn_id}-${toolCallId}-call`,
       kind: "tool_call",
       title: `Tool call · ${toolName}`,
-      assistantContent: "",
+      assistantContent,
       toolCalls: [
         {
           id: toolCallId,
@@ -85,6 +100,42 @@ function runtimeToolItem(event: { type: string; turn_id: string; payload: Record
     };
   }
   return null;
+}
+
+function runtimeStateFromPayload(value: unknown): RuntimeState | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<RuntimeState>;
+  if (typeof candidate.session_id !== "string") {
+    return null;
+  }
+  return {
+    session_id: candidate.session_id,
+    running: Boolean(candidate.running),
+    connected: Boolean(candidate.connected),
+  };
+}
+
+function formatServerError(payload: Record<string, unknown>): string {
+  const message = String(payload.message ?? "Event stream error");
+  const code = typeof payload.code === "string" ? payload.code : "";
+  if (code === "session_running") {
+    return "This session is already running.";
+  }
+  if (code === "invalid_command") {
+    return "The server rejected an unsupported command.";
+  }
+  if (code === "invalid_message") {
+    return "Message content must be non-empty.";
+  }
+  if (code === "session_not_found") {
+    return "Session not found.";
+  }
+  if (code === "config_error") {
+    return `Configuration error: ${message}`;
+  }
+  return message;
 }
 
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
@@ -316,9 +367,15 @@ export function App() {
   const [inspection, setInspection] = useState<SessionInspection | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [taskState, setTaskState] = useState<TaskState | null>(null);
+  const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
+  const [memoryView, setMemoryView] = useState<MemoryView | null>(null);
+  const [skillList, setSkillList] = useState<SkillListView | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<SkillDocument | null>(null);
   const [liveToolItems, setLiveToolItems] = useState<ChatItem[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(560);
+  const [inspectorView, setInspectorView] = useState<InspectorView>("task");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -329,6 +386,25 @@ export function App() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const pendingFirstMessageRef = useRef<{ sessionId: string; content: string } | null>(null);
   const runningSessionIdRef = useRef("");
+  const pendingSentMessageRef = useRef("");
+  const pendingToolReasoningRef = useRef("");
+  const inspectorResizeRef = useRef({ startX: 0, startWidth: 0 });
+
+  const resizeInspector = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    const sidebarWidth = sessionsOpen ? 280 : 52;
+    const minWidth = 360;
+    const maxWidth = Math.max(minWidth, Math.min(720, window.innerWidth - sidebarWidth - 360));
+    const nextWidth = inspectorResizeRef.current.startWidth + inspectorResizeRef.current.startX - event.clientX;
+    setInspectorWidth(Math.max(minWidth, Math.min(maxWidth, nextWidth)));
+  };
+
+  const startInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    inspectorResizeRef.current = { startX: event.clientX, startWidth: inspectorWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
 
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
@@ -336,14 +412,16 @@ export function App() {
   }, []);
 
   const refreshSession = useCallback(async (sessionId: string) => {
-    const [nextInspection, nextMessages, nextTaskState] = await Promise.all([
+    const [nextInspection, nextMessages, nextTaskState, nextRuntimeState] = await Promise.all([
       inspectSession(sessionId),
       loadMessages(sessionId),
       getTaskState(sessionId),
+      getRuntimeState(sessionId),
     ]);
     setInspection(nextInspection);
     setMessages(nextMessages);
     setTaskState(nextTaskState);
+    setRuntimeState(nextRuntimeState);
   }, []);
 
   const refreshActiveSession = useCallback(async () => {
@@ -351,6 +429,7 @@ export function App() {
       setInspection(null);
       setMessages([]);
       setTaskState(null);
+      setRuntimeState(null);
       setLiveToolItems([]);
       return;
     }
@@ -360,9 +439,23 @@ export function App() {
     await refreshSession(activeSessionId);
   }, [activeSessionId, refreshSession]);
 
+  const refreshMemory = useCallback(async () => {
+    setMemoryView(await getMemory());
+  }, []);
+
+  const refreshSkills = useCallback(async () => {
+    const nextSkillList = await listSkills();
+    setSkillList(nextSkillList);
+  }, []);
+
+  const loadSkill = useCallback(async (name: string) => {
+    setSelectedSkill(await readSkill(name));
+  }, []);
+
   const clearLiveTurnState = useCallback(() => {
     setStreamingMessage("");
     setLiveToolItems([]);
+    pendingToolReasoningRef.current = "";
   }, []);
 
   const appendStreamingDelta = useCallback((delta: string) => {
@@ -379,6 +472,7 @@ export function App() {
         return;
       }
       runningSessionIdRef.current = sessionId;
+      setRuntimeState({ session_id: sessionId, running: true, connected: true });
       socketRef.current.send(JSON.stringify({ type: "user_message", content }));
     },
     [clearLiveTurnState],
@@ -393,6 +487,18 @@ export function App() {
   }, [refreshActiveSession]);
 
   useEffect(() => {
+    if (!taskOpen) {
+      return;
+    }
+    if (inspectorView === "memory") {
+      refreshMemory().catch((nextError) => setError(String(nextError)));
+    }
+    if (inspectorView === "skills") {
+      refreshSkills().catch((nextError) => setError(String(nextError)));
+    }
+  }, [inspectorView, refreshMemory, refreshSkills, taskOpen]);
+
+  useEffect(() => {
     socketRef.current?.close();
     clearLiveTurnState();
     setEventStreamReady(false);
@@ -405,6 +511,14 @@ export function App() {
       }
       if (event.type === "server_ready") {
         setEventStreamReady(true);
+        const nextRuntimeState = runtimeStateFromPayload(event.payload.runtime);
+        if (nextRuntimeState) {
+          setRuntimeState(nextRuntimeState);
+          if (nextRuntimeState.running) {
+            runningSessionIdRef.current = nextRuntimeState.session_id;
+            setBusy(true);
+          }
+        }
         const pending = pendingFirstMessageRef.current;
         if (pending?.sessionId === activeSessionId) {
           pendingFirstMessageRef.current = null;
@@ -413,17 +527,38 @@ export function App() {
         return;
       }
       if (event.type === "server_error") {
-        setError(String(event.payload.message ?? "Event stream error"));
+        const code = typeof event.payload.code === "string" ? event.payload.code : "";
+        if (code === "session_running" && pendingSentMessageRef.current) {
+          setDraft(pendingSentMessageRef.current);
+        }
+        setError(formatServerError(event.payload));
         pendingFirstMessageRef.current = null;
         runningSessionIdRef.current = "";
+        pendingSentMessageRef.current = "";
+        const currentRuntime = runtimeStateFromPayload(event.payload.runtime);
+        setRuntimeState(
+          currentRuntime ??
+            (activeSessionId
+              ? { session_id: activeSessionId, running: false, connected: true }
+              : null),
+        );
         setBusy(false);
         return;
       }
       if (event.type === "assistant_delta") {
+        if (activeSessionId) {
+          setRuntimeState({ session_id: activeSessionId, running: true, connected: true });
+        }
         appendStreamingDelta(String(event.payload.delta ?? ""));
         return;
       }
       if (event.type === "assistant_message") {
+        const toolCallCount = Number(event.payload.tool_call_count ?? 0);
+        if (toolCallCount > 0) {
+          pendingToolReasoningRef.current = String(event.payload.content ?? "").trim();
+          setStreamingMessage("");
+          return;
+        }
         if (!event.payload.streamed) {
           clearLiveTurnState();
           appendStreamingDelta(String(event.payload.content ?? ""));
@@ -431,9 +566,13 @@ export function App() {
         return;
       }
       if (event.type === "tool_call" || event.type === "tool_result") {
-        const item = runtimeToolItem(event);
+        const reasoning = event.type === "tool_call" ? pendingToolReasoningRef.current : "";
+        const item = runtimeToolItem(event, reasoning);
         if (item) {
           setLiveToolItems((current) => [...current, item]);
+          if (event.type === "tool_call") {
+            pendingToolReasoningRef.current = "";
+          }
         }
         return;
       }
@@ -442,11 +581,16 @@ export function App() {
           .then(() => {
             clearLiveTurnState();
             runningSessionIdRef.current = "";
+            pendingSentMessageRef.current = "";
             setBusy(false);
+            if (activeSessionId) {
+              return getRuntimeState(activeSessionId).then(setRuntimeState);
+            }
           })
           .catch((nextError) => {
             setError(String(nextError));
             runningSessionIdRef.current = "";
+            pendingSentMessageRef.current = "";
             setBusy(false);
           });
         refreshSessions().catch((nextError) => setError(String(nextError)));
@@ -461,6 +605,11 @@ export function App() {
     socket.onclose = () => {
       if (socketRef.current === socket) {
         setEventStreamReady(false);
+        setRuntimeState((current) =>
+          current && current.session_id === activeSessionId
+            ? { ...current, connected: false }
+            : current,
+        );
         if (runningSessionIdRef.current === activeSessionId) {
           runningSessionIdRef.current = "";
           setBusy(false);
@@ -472,6 +621,7 @@ export function App() {
         setEventStreamReady(false);
         pendingFirstMessageRef.current = null;
         runningSessionIdRef.current = "";
+        pendingSentMessageRef.current = "";
         setBusy(false);
       }
     };
@@ -505,11 +655,17 @@ export function App() {
   }, [chatItems]);
   const showStreamingMessage =
     Boolean(streamingMessage) && streamingMessage.trim() !== lastAssistantContent;
-  const currentSessionRunning = Boolean(activeSessionId && busy && runningSessionIdRef.current === activeSessionId);
+  const currentSessionRunning = Boolean(
+    activeSessionId &&
+      (runtimeState?.session_id === activeSessionId
+        ? runtimeState.running
+        : busy && runningSessionIdRef.current === activeSessionId),
+  );
+  const composerDisabled = currentSessionRunning || Boolean(activeSessionId && !eventStreamReady);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end" });
-  }, [activeSessionId, visibleChatItems.length, showStreamingMessage]);
+  }, [activeSessionId, visibleChatItems.length, showStreamingMessage, streamingMessage]);
 
   async function handleCreateSession() {
     setError("");
@@ -517,9 +673,11 @@ export function App() {
     setInspection(null);
     setMessages([]);
     setTaskState(null);
+    setRuntimeState(null);
     clearLiveTurnState();
     pendingFirstMessageRef.current = null;
     runningSessionIdRef.current = "";
+    pendingSentMessageRef.current = "";
     setBusy(false);
     setDraft("");
   }
@@ -545,11 +703,11 @@ export function App() {
 
   async function submitMessage() {
     const content = draft.trim();
-    const currentRunning = Boolean(activeSessionId && runningSessionIdRef.current === activeSessionId);
-    if (!content || currentRunning || (activeSessionId && !eventStreamReady)) {
+    if (!content || composerDisabled) {
       return;
     }
     setDraft("");
+    pendingSentMessageRef.current = content;
     setBusy(true);
     setError("");
     clearLiveTurnState();
@@ -558,6 +716,7 @@ export function App() {
       if (!activeSessionId) {
         const session = await createSession();
         runningSessionIdRef.current = session.session_id;
+        setRuntimeState({ session_id: session.session_id, running: true, connected: false });
         pendingFirstMessageRef.current = {
           sessionId: session.session_id,
           content,
@@ -571,6 +730,7 @@ export function App() {
     } catch (nextError) {
       setError(String(nextError));
       runningSessionIdRef.current = "";
+      pendingSentMessageRef.current = "";
       setBusy(false);
     }
   }
@@ -599,6 +759,7 @@ export function App() {
       className={`app-shell ${sessionsOpen ? "sessions-open" : "sessions-collapsed"} ${
         taskOpen ? "task-open" : "task-collapsed"
       }`}
+      style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
     >
       <aside className={`sidebar ${sessionsOpen ? "expanded" : "collapsed"}`}>
         {sessionsOpen ? (
@@ -752,10 +913,11 @@ export function App() {
             onKeyDown={handleComposerKeyDown}
             placeholder="Ask lulu-agent..."
             rows={2}
+            disabled={currentSessionRunning}
           />
           <button
             className="send-button"
-            disabled={!draft.trim() || currentSessionRunning || Boolean(activeSessionId && !eventStreamReady)}
+            disabled={!draft.trim() || composerDisabled}
             type="submit"
           >
             <Send size={18} />
@@ -765,10 +927,46 @@ export function App() {
 
       <aside className={`inspector ${taskOpen ? "expanded" : "collapsed"}`}>
         {taskOpen ? (
-          <section className="panel-section">
+          <>
+            <div
+              className="inspector-resizer"
+              onPointerDown={startInspectorResize}
+              onPointerMove={resizeInspector}
+              role="separator"
+              aria-label="Resize inspector"
+              aria-orientation="vertical"
+            />
+            <section className="panel-section">
             <div className="section-title">
-              <ListTree size={16} />
-              Task
+              <div className="inspector-tabs">
+                <button
+                  className={`inspector-tab ${inspectorView === "task" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setInspectorView("task")}
+                  title="Task"
+                >
+                  <ListTree size={16} />
+                  <span>Task</span>
+                </button>
+                <button
+                  className={`inspector-tab ${inspectorView === "memory" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setInspectorView("memory")}
+                  title="Memory"
+                >
+                  <Brain size={16} />
+                  <span>Memory</span>
+                </button>
+                <button
+                  className={`inspector-tab ${inspectorView === "skills" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setInspectorView("skills")}
+                  title="Skills"
+                >
+                  <BookOpen size={16} />
+                  <span>Skills</span>
+                </button>
+              </div>
               <button
                 className="icon-button"
                 type="button"
@@ -778,7 +976,7 @@ export function App() {
                 <PanelRightClose size={17} />
               </button>
             </div>
-            {taskState ? (
+            {inspectorView === "task" && taskState ? (
               <div className="task-block">
                 <strong>{taskState.goal}</strong>
                 <span className="status-chip">{taskState.status}</span>
@@ -792,10 +990,73 @@ export function App() {
                 </ol>
                 {taskState.next_action && <p className="next-action">{taskState.next_action}</p>}
               </div>
-            ) : (
+            ) : inspectorView === "task" ? (
               <p className="muted">No task state.</p>
+            ) : inspectorView === "memory" ? (
+              <div className="knowledge-block">
+                <div className="knowledge-header">
+                  <strong>Memory</strong>
+                  <button className="text-button" type="button" onClick={() => void refreshMemory()}>
+                    Refresh
+                  </button>
+                </div>
+                {memoryView ? (
+                  <>
+                    <small>{memoryView.path}</small>
+                    <pre className="knowledge-content">{memoryView.content || "[empty]"}</pre>
+                  </>
+                ) : (
+                  <p className="muted">No memory loaded.</p>
+                )}
+              </div>
+            ) : (
+              <div className="knowledge-block">
+                <div className="knowledge-header">
+                  <strong>Skills</strong>
+                  <button className="text-button" type="button" onClick={() => void refreshSkills()}>
+                    Refresh
+                  </button>
+                </div>
+                {skillList ? (
+                  <>
+                    <small>{skillList.root}</small>
+                    <div className="skill-browser">
+                      <div className="skill-list">
+                        {skillList.skills.map((skill) => (
+                          <button
+                            className={`skill-item ${selectedSkill?.name === skill.name ? "active" : ""}`}
+                            key={skill.name}
+                            type="button"
+                            onClick={() => void loadSkill(skill.name)}
+                          >
+                            <strong>{skill.name}</strong>
+                            <span>{skill.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {selectedSkill ? (
+                        <div className="skill-document">
+                          <div>
+                            <strong>{selectedSkill.name}</strong>
+                            <span>{selectedSkill.description}</span>
+                          </div>
+                          <pre className="skill-content">{selectedSkill.content || "[empty]"}</pre>
+                        </div>
+                      ) : (
+                        <p className="skill-placeholder muted">Select a skill to read.</p>
+                      )}
+                    </div>
+                    {skillList.errors.length > 0 && (
+                      <pre className="knowledge-content">{formatDetails(skillList.errors)}</pre>
+                    )}
+                  </>
+                ) : (
+                  <p className="muted">No skills loaded.</p>
+                )}
+              </div>
             )}
-          </section>
+            </section>
+          </>
         ) : (
           <button
             className="panel-rail-button"

@@ -39,6 +39,10 @@ class EventHub:
             if not subscribers:
                 self._subscribers.pop(session_id, None)
 
+    def subscriber_count(self, session_id: str) -> int:
+        with self._lock:
+            return len(self._subscribers.get(session_id, []))
+
 
 class HubEventSink(EventSink):
     def __init__(self, hub: EventHub, session_id: str):

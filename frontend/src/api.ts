@@ -1,5 +1,9 @@
 import type {
+  MemoryView,
   RuntimeEvent,
+  RuntimeState,
+  SkillDocument,
+  SkillListView,
   SessionInspection,
   SessionSummary,
   TaskState,
@@ -65,6 +69,27 @@ export async function getTaskState(sessionId: string): Promise<TaskState | null>
     `/sessions/${sessionId}/task`,
   );
   return data.task_state;
+}
+
+export async function getRuntimeState(sessionId: string): Promise<RuntimeState> {
+  const data = await requestJson<{ runtime: RuntimeState }>(
+    `/sessions/${sessionId}/runtime`,
+  );
+  return data.runtime;
+}
+
+export async function getMemory(): Promise<MemoryView> {
+  const data = await requestJson<{ memory: MemoryView }>("/memory");
+  return data.memory;
+}
+
+export async function listSkills(): Promise<SkillListView> {
+  return requestJson<SkillListView>("/skills");
+}
+
+export async function readSkill(name: string): Promise<SkillDocument> {
+  const data = await requestJson<{ skill: SkillDocument }>(`/skills/${encodeURIComponent(name)}`);
+  return data.skill;
 }
 
 export async function getTraceTimeline(sessionId: string): Promise<TraceTimelineItem[]> {

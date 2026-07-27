@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MCP_CONFIG_PATH = ".lulu/mcp.json"
+DEFAULT_MCP_CONFIG_PATH = Path.home() / ".lulu" / "mcp.json"
 DEFAULT_MCP_SERVER_TIMEOUT = 30.0
 MCP_SERVER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 
@@ -129,7 +129,7 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
     """获取 MCP 配置
     
     Args:
-        path (str | Path): MCP 配置文件路径, 默认为 .lulu/mcp.json
+        path (str | Path): MCP 配置文件路径, 默认为 ~/.lulu/mcp.json
     
     Returns:
         MCPConfigResult: MCP 配置加载结果, 包含服务器配置列表和错误信息

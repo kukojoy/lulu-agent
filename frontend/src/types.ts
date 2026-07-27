@@ -40,6 +40,56 @@ export type TaskState = {
   next_action: string;
 };
 
+export type RuntimeState = {
+  session_id: string;
+  running: boolean;
+  connected: boolean;
+};
+
+export type MemoryEntry = {
+  id: number;
+  kind: string;
+  content: string;
+  updated_at: string;
+};
+
+export type MemoryView = {
+  ok: boolean;
+  message?: string;
+  path: string;
+  content: string;
+  entries: MemoryEntry[];
+  entry_count: number;
+  truncated: boolean;
+  original_length: number;
+};
+
+export type SkillMetadata = {
+  name: string;
+  description: string;
+  path: string;
+  directory: string;
+};
+
+export type SkillLoadError = {
+  path: string;
+  error: string;
+};
+
+export type SkillListView = {
+  root: string;
+  skills: SkillMetadata[];
+  errors: SkillLoadError[];
+};
+
+export type SkillDocument = {
+  name: string;
+  description: string;
+  path: string;
+  directory: string;
+  content: string;
+};
+
 export type TraceTimelineItem = {
   event_type?: string;
   turn_id?: string;

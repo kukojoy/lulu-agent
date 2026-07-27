@@ -7,6 +7,7 @@
 4. [mcp/registry.py] for tool in tools: tools.register(tool)
 """
 from dataclasses import dataclass
+from pathlib import Path
 
 from lulu_agent.mcp.config import DEFAULT_MCP_CONFIG_PATH, load_mcp_config
 from lulu_agent.mcp.client import MCPClient
@@ -47,7 +48,7 @@ def _adapter_error_to_registry_error(
 # === 唯一对外接口 ===
 def register_mcp_tools(
     registry: ToolRegistry,
-    config_path: str = DEFAULT_MCP_CONFIG_PATH,
+    config_path: str | Path = DEFAULT_MCP_CONFIG_PATH,
 ) -> MCPRegistryResult:
     """注册 MCP 工具到工具注册表
     
