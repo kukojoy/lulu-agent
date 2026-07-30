@@ -4,7 +4,7 @@ import urllib.request
 from html.parser import HTMLParser
 
 from lulu_agent.tools import ToolResult, tool
-from lulu_agent.tools.runtime import ERROR_EXTERNAL_TOOL, ERROR_TIMEOUT
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_INVALID_ARGUMENTS, ERROR_TIMEOUT
 
 
 DEFAULT_EXTRACT_LIMIT = 8000
@@ -38,15 +38,23 @@ WEB_EXTRACT_TIMEOUT_SECONDS = 10
 def web_extract(args):
     url = args["url"].strip()
     if not url:
-        return ToolResult(ok=False, error="url must not be empty.")
+        return ToolResult(ok=False, error="url must not be empty.", error_type=ERROR_INVALID_ARGUMENTS)
 
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return ToolResult(ok=False, error="url must be an absolute http or https URL.")
+        return ToolResult(
+            ok=False,
+            error="url must be an absolute http or https URL.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
 
     limit = args.get("limit", DEFAULT_EXTRACT_LIMIT)
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-        return ToolResult(ok=False, error="limit must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="limit must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
     limit = min(limit, MAX_EXTRACT_LIMIT)
 
     request = urllib.request.Request(

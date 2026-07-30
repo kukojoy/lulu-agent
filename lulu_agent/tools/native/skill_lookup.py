@@ -2,6 +2,7 @@ from dataclasses import asdict
 
 from lulu_agent.skills.store import SkillStoreError, SkillStore
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
 
 
 @tool(
@@ -39,7 +40,7 @@ def skill_lookup(args):
             output={
                 "root": result.root,
                 "skills": [asdict(skill) for skill in result.skills],
-                "errors": [asdict(error) for error in result.errors],
+                "load_issues": [asdict(issue) for issue in result.load_issues],
             },
         )
 
@@ -47,7 +48,7 @@ def skill_lookup(args):
         try:
             document = store.read_skill(args.get("name", ""))
         except SkillStoreError as exc:
-            return ToolResult(ok=False, error=str(exc))
+            return ToolResult(ok=False, error=exc.error_message, error_type=exc.error_type)
 
         return ToolResult(
             ok=True,
@@ -59,4 +60,5 @@ def skill_lookup(args):
     return ToolResult(
         ok=False,
         error="Unknown skill action. Use one of: list, read.",
+        error_type=ERROR_INVALID_ARGUMENTS,
     )

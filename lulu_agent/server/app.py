@@ -118,7 +118,7 @@ def create_app(runner: ServerRunner | None = None):
         try:
             return {"skill": runner.read_skill(name)}
         except SkillStoreError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail=exc.error_message) from exc
 
     @app.post("/sessions/{session_id}/messages")
     async def send_message(session_id: str, request: MessageRequest) -> dict[str, Any]:

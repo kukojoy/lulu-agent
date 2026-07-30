@@ -104,7 +104,7 @@ class ServerRunner:
         return {
             "root": result.root,
             "skills": [asdict(skill) for skill in result.skills],
-            "errors": [asdict(error) for error in result.errors],
+            "load_issues": [asdict(issue) for issue in result.load_issues],
         }
 
     def read_skill(self, name: str) -> dict[str, Any]:

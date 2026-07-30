@@ -2,13 +2,15 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from lulu_agent.runtime.errors import ErrorType
+
 
 @dataclass
 class ToolResult:
     ok: bool
     output: Any = None
     error: str | None = None
-    error_type: str | None = None
+    error_type: ErrorType | None = None
     metadata: dict[str, Any] | None = None
     truncated: bool = False
 

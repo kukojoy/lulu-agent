@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from lulu_agent.mcp.client import MCPClient
 from lulu_agent.tools import Tool, ToolResult
-from lulu_agent.tools.runtime import ERROR_EXTERNAL_TOOL
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL
 
 
 MCP_TOOL_NAME_PREFIX = "mcp"

@@ -10,6 +10,7 @@ Actions:
 from lulu_agent.runtime.task_state import TaskState
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
 
 
 @tool(
@@ -103,7 +104,11 @@ def task_state(args):
     session_store = args.get("_session_store")
     session_id = args.get("_session_id")
     if not isinstance(session_store, SessionStore) or not session_id:
-        return ToolResult(ok=False, error="task_state requires an active session.")
+        return ToolResult(
+            ok=False,
+            error="task_state requires an active session.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
 
     action = args["action"]
     if action == "read":
@@ -113,21 +118,33 @@ def task_state(args):
     if action == "update":
         overwrite = args.get("overwrite")
         if not isinstance(overwrite, bool):
-            return ToolResult(ok=False, error="overwrite must be a boolean for update.")
+            return ToolResult(
+                ok=False,
+                error="overwrite must be a boolean for update.",
+                error_type=ERROR_INVALID_ARGUMENTS,
+            )
         state = args.get("state")
         if not isinstance(state, dict):
-            return ToolResult(ok=False, error="state must be an object for update.")
+            return ToolResult(
+                ok=False,
+                error="state must be an object for update.",
+                error_type=ERROR_INVALID_ARGUMENTS,
+            )
         try:
             if overwrite:
                 current = TaskState.from_dict(state)
             else:
                 current = _merge_task_state(session_store.load_latest_task_state(session_id), state)
         except ValueError as exc:
-            return ToolResult(ok=False, error=str(exc))
+            return ToolResult(ok=False, error=str(exc), error_type=ERROR_INVALID_ARGUMENTS)
         session_store.append_task_state(session_id, current)
         return ToolResult(ok=True, output={"task_state": current.to_dict()})
 
-    return ToolResult(ok=False, error="Unknown task_state action. Use one of: read, update.")
+    return ToolResult(
+        ok=False,
+        error="Unknown task_state action. Use one of: read, update.",
+        error_type=ERROR_INVALID_ARGUMENTS,
+    )
 
 
 def _merge_task_state(current: TaskState | None, patch: dict) -> TaskState:

@@ -71,15 +71,15 @@ export type SkillMetadata = {
   directory: string;
 };
 
-export type SkillLoadError = {
+export type SkillLoadIssue = {
   path: string;
-  error: string;
+  issue_message: string;
 };
 
 export type SkillListView = {
   root: string;
   skills: SkillMetadata[];
-  errors: SkillLoadError[];
+  load_issues: SkillLoadIssue[];
 };
 
 export type SkillDocument = {

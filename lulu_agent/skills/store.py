@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
+
 
 DEFAULT_SKILLS_ROOT = Path.home() / ".lulu" / "skills"
 SKILL_FILE_NAME = "SKILL.md"
@@ -34,16 +36,16 @@ class SkillMetadata:
 
 
 @dataclass(frozen=True)
-class SkillLoadError:
+class SkillLoadIssue:
     path: str
-    error: str
+    issue_message: str
 
 
 @dataclass(frozen=True)
 class SkillResult:
     root: str
     skills: list[SkillMetadata] = field(default_factory=list)
-    errors: list[SkillLoadError] = field(default_factory=list)
+    load_issues: list[SkillLoadIssue] = field(default_factory=list)
     name: str = ""
     description: str = ""
     path: str = ""
@@ -55,8 +57,9 @@ class SkillResult:
         return {field: getattr(self, field) for field in fields}
 
 
-class SkillStoreError(RuntimeError):
-    pass
+class SkillStoreError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType = ERROR_INVALID_ARGUMENTS):
+        super().__init__(error_message, error_type)
 
 
 class SkillStore:
@@ -65,7 +68,7 @@ class SkillStore:
 
     # === 对外接口 ===
     def list_skills(self) -> SkillResult:
-        """列举所有技能, 返回 skill metadata 列表和错误消息列表"""
+        """列举所有技能, 返回 skill metadata 列表和加载问题列表"""
         root = self.root.resolve()
 
         # root 不存在时, 不返回错误信息
@@ -73,23 +76,23 @@ class SkillStore:
             return self._result(
                 root=str(root),
                 skills=[],
-                errors=[],
+                load_issues=[],
             )
 
         if not self.root.is_dir():
             return self._result(
                 root=str(root),
                 skills=[],
-                errors=[
-                    SkillLoadError(
+                load_issues=[
+                    SkillLoadIssue(
                         path=str(root),
-                        error="Skills root is not a directory",
+                        issue_message="Skills root is not a directory",
                     )
                 ],
             )
 
         skills: list[SkillMetadata] = []
-        errors: list[SkillLoadError] = []
+        load_issues: list[SkillLoadIssue] = []
 
         seen_names: set[str] = set()
         for directory in sorted(self.root.iterdir(), key=lambda path: path.name):
@@ -98,10 +101,10 @@ class SkillStore:
 
             skill_path = directory / SKILL_FILE_NAME
             if not skill_path.exists():
-                errors.append(
-                    SkillLoadError(
+                load_issues.append(
+                    SkillLoadIssue(
                         path=str(skill_path.resolve()),
-                        error=f"Missing {SKILL_FILE_NAME}.",
+                        issue_message=f"Missing {SKILL_FILE_NAME}.",
                     )
                 )
                 continue
@@ -109,19 +112,19 @@ class SkillStore:
             try:
                 metadata = self._load_skill_metadata(skill_path, directory)
             except SkillStoreError as exc:
-                errors.append(
-                    SkillLoadError(
+                load_issues.append(
+                    SkillLoadIssue(
                         path=str(skill_path.resolve()),
-                        error=str(exc),
+                        issue_message=exc.error_message,
                     )
                 )
                 continue
 
             if metadata.name in seen_names:
-                errors.append(
-                    SkillLoadError(
+                load_issues.append(
+                    SkillLoadIssue(
                         path=metadata.path,
-                        error=f"Duplicate skill name: {metadata.name}.",
+                        issue_message=f"Duplicate skill name: {metadata.name}.",
                     )
                 )
                 continue
@@ -132,7 +135,7 @@ class SkillStore:
         return self._result(
             root=str(root),
             skills=sorted(skills, key=lambda skill: skill.name),
-            errors=errors,
+            load_issues=load_issues,
         )
 
     def read_skill(self, name: str) -> SkillResult:
@@ -143,7 +146,7 @@ class SkillStore:
         result = self.list_skills()
         matches = [skill for skill in result.skills if skill.name == name]
         if not matches:
-            raise SkillStoreError(f"Skill not found: {name}")
+            raise SkillStoreError(f"Skill not found: {name}", ERROR_NOT_FOUND)
 
         if len(matches) > 1:
             raise SkillStoreError(f"Multiple skills matched name: {name}")
@@ -249,7 +252,7 @@ class SkillStore:
         with self._file_lock():
             target = self._support_file_path(name, file_path)
             if not target.exists():
-                raise SkillStoreError(f"File not found: {file_path}")
+                raise SkillStoreError(f"File not found: {file_path}", ERROR_NOT_FOUND)
             if not target.is_file():
                 raise SkillStoreError(f"Path is not a file: {file_path}")
 
@@ -398,7 +401,7 @@ class SkillStore:
         skill_path = skill_dir / SKILL_FILE_NAME
 
         if not skill_path.exists():
-            raise SkillStoreError(f"Skill not found: {name}")
+            raise SkillStoreError(f"Skill not found: {name}", ERROR_NOT_FOUND)
         if not skill_path.is_file():
             raise SkillStoreError(f"Skill path is not a file: {skill_path}")
         
@@ -448,7 +451,7 @@ class SkillStore:
         self,
         root: str = "",
         skills: list[SkillMetadata] | None = None,
-        errors: list[SkillLoadError] | None = None,
+        load_issues: list[SkillLoadIssue] | None = None,
         name: str = "",
         description: str = "",
         path: str = "",
@@ -459,7 +462,7 @@ class SkillStore:
         return SkillResult(
             root=root,
             skills=list(skills or []),
-            errors=list(errors or []),
+            load_issues=list(load_issues or []),
             name=name,
             description=description,
             path=path,

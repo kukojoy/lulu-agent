@@ -4,7 +4,7 @@ from pathlib import Path
 from lulu_agent.runtime.approval import request_cli_approval
 from lulu_agent.runtime.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL, classify_shell_command
 from lulu_agent.tools import ToolResult, tool, truncate_text
-from lulu_agent.tools.runtime import ERROR_TIMEOUT
+from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_PERMISSION_DENIED, ERROR_TIMEOUT
 
 
 MAX_SHELL_OUTPUT_CHARS = 4000
@@ -34,7 +34,11 @@ def run_shell(args):
     command = args["command"]
     timeout = args.get("timeout", DEFAULT_SHELL_TIMEOUT_SECONDS)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
-        return ToolResult(ok=False, error="timeout must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="timeout must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
     timeout = min(timeout, MAX_SHELL_TIMEOUT_SECONDS)
 
     decision = classify_shell_command(command)
@@ -42,12 +46,14 @@ def run_shell(args):
         return ToolResult(
             ok=False,
             error=f"Refused to run risky shell command: {decision.reason}",
+            error_type=ERROR_PERMISSION_DENIED,
         )
 
     if decision.decision == SAFETY_NEEDS_APPROVAL and not request_cli_approval(decision, command):
         return ToolResult(
             ok=False,
             error=f"Shell command requires approval and was denied: {decision.reason}",
+            error_type=ERROR_PERMISSION_DENIED,
         )
 
     try:

@@ -4,7 +4,7 @@ import urllib.error
 import urllib.request
 
 from lulu_agent.tools import ToolResult, tool, truncate_text
-from lulu_agent.tools.runtime import ERROR_EXTERNAL_TOOL, ERROR_TIMEOUT
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_INVALID_ARGUMENTS, ERROR_TIMEOUT, ErrorType
 
 from lulu_agent.config import config
 
@@ -38,11 +38,15 @@ MAX_SNIPPET_CHARS = 1000
 def web_search(args):
     query = args["query"].strip()
     if not query:
-        return ToolResult(ok=False, error="query must not be empty.")
+        return ToolResult(ok=False, error="query must not be empty.", error_type=ERROR_INVALID_ARGUMENTS)
 
     count = args.get("count", DEFAULT_WEB_SEARCH_COUNT)
     if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-        return ToolResult(ok=False, error="count must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="count must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
 
     count = min(count, MAX_WEB_SEARCH_COUNT)
     api_key = config.tavily_api_key or os.getenv("TAVILY_API_KEY", "").strip()
@@ -129,7 +133,7 @@ def _search_error(
     error: str,
     query: str,
     *,
-    error_type: str = ERROR_EXTERNAL_TOOL,
+    error_type: ErrorType = ERROR_EXTERNAL_TOOL,
     metadata: dict[str, object] | None = None,
 ) -> ToolResult:
     return ToolResult(

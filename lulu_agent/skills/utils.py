@@ -17,12 +17,12 @@ def install_bundled_skills(
     result = SkillStore(bundled_root).list_skills()
     records: list[dict] = []
 
-    for error in result.errors:
+    for issue in result.load_issues:
         records.append(
             {
                 "action": "error",
-                "path": error.path,
-                "error": error.error,
+                "path": issue.path,
+                "issue_message": issue.issue_message,
             }
         )
 

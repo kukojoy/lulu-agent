@@ -7,5 +7,5 @@ from lulu_agent.skills.store import (
     SkillResult,
     SkillStore,
     SkillStoreError,
-    SkillLoadError,
+    SkillLoadIssue,
 )

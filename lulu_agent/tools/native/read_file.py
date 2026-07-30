@@ -1,5 +1,11 @@
 from lulu_agent.runtime.safety import PATH_OPERATION_READ, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import (
+    ERROR_EXTERNAL_TOOL,
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_NOT_FOUND,
+    ERROR_PERMISSION_DENIED,
+)
 
 
 DEFAULT_READ_OFFSET = 1
@@ -38,25 +44,37 @@ def read_file(args):
     try:
         path = validate_workspace_path(args["path"], operation=PATH_OPERATION_READ)
     except PathSafetyError as exc:
-        return ToolResult(ok=False, error=str(exc))
+        return ToolResult(ok=False, error=str(exc), error_type=ERROR_PERMISSION_DENIED)
 
     if not path.exists():
-        return ToolResult(ok=False, error=f"File not found: {path}")
+        return ToolResult(ok=False, error=f"File not found: {path}", error_type=ERROR_NOT_FOUND)
     if not path.is_file():
-        return ToolResult(ok=False, error=f"Path is not a file: {path}")
+        return ToolResult(ok=False, error=f"Path is not a file: {path}", error_type=ERROR_INVALID_ARGUMENTS)
 
     offset = args.get("offset", DEFAULT_READ_OFFSET)
     limit = args.get("limit", DEFAULT_READ_LIMIT)
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 1:
-        return ToolResult(ok=False, error="offset must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="offset must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-        return ToolResult(ok=False, error="limit must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="limit must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
     limit = min(limit, MAX_READ_LIMIT)
 
     try:
         raw_content = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return ToolResult(ok=False, error=f"Failed to read file {path}: {exc}")
+        return ToolResult(
+            ok=False,
+            error=f"Failed to read file {path}: {exc}",
+            error_type=ERROR_EXTERNAL_TOOL,
+        )
 
     lines = raw_content.splitlines()
     total_lines = len(lines)

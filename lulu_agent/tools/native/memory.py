@@ -1,4 +1,5 @@
-from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_INVALID_ARGUMENTS
+from lulu_agent.storage.memory_store import MemoryResult, MemoryStore, MemoryStoreError
 from lulu_agent.tools import ToolResult, tool
 
 
@@ -47,24 +48,29 @@ def memory(args):
         return ToolResult(
             ok=False,
             error="Unknown memory action. Use one of: read, add, update, remove.",
+            error_type=ERROR_INVALID_ARGUMENTS,
         )
 
+    try:
+        if action == "read":
+            result = store.read()
+        elif action == "add":
+            result = store.add(args.get("kind", ""), args.get("content", ""))
+        elif action == "update":
+            result = store.update(args.get("id"), args.get("kind", ""), args.get("content", ""))
+        else:
+            result = store.remove(args.get("id"))
+    except MemoryStoreError as exc:
+        return ToolResult(ok=False, error=exc.error_message, error_type=exc.error_type)
+    except OSError as exc:
+        return ToolResult(ok=False, error=f"Memory operation failed: {exc}", error_type=ERROR_EXTERNAL_TOOL)
+
+    if not isinstance(result, MemoryResult):
+        return ToolResult(ok=False, error="Memory operation failed.", error_type=ERROR_EXTERNAL_TOOL)
+
     if action == "read":
-        result = store.read()
+        output = result.to_dict(("path", "content", "entries", "truncated", "original_length"))
+    else:
+        output = result.to_dict(("message", "path", "entry"))
 
-    elif action == "add":
-        result = store.add(args.get("kind", ""), args.get("content", ""))
-
-    elif action == "update":
-        result = store.update(args.get("id"), args.get("kind", ""), args.get("content", ""))
-
-    elif action == "remove":
-        result = store.remove(args.get("id"))
-
-    return _memory_result(result)
-
-
-def _memory_result(result: dict) -> ToolResult:
-    if result.get("ok"):
-        return ToolResult(ok=True, output=result)
-    return ToolResult(ok=False, error=result.get("error", "Memory operation failed."))
+    return ToolResult(ok=True, output=output)

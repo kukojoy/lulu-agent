@@ -1046,8 +1046,8 @@ export function App() {
                         <p className="skill-placeholder muted">Select a skill to read.</p>
                       )}
                     </div>
-                    {skillList.errors.length > 0 && (
-                      <pre className="knowledge-content">{formatDetails(skillList.errors)}</pre>
+                    {skillList.load_issues.length > 0 && (
+                      <pre className="knowledge-content">{formatDetails(skillList.load_issues)}</pre>
                     )}
                   </>
                 ) : (

@@ -4,6 +4,13 @@ from pathlib import Path
 
 from lulu_agent.runtime.safety import PATH_OPERATION_READ, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import (
+    ERROR_EXTERNAL_TOOL,
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_NOT_FOUND,
+    ERROR_PERMISSION_DENIED,
+    ERROR_TIMEOUT,
+)
 
 
 DEFAULT_SEARCH_LIMIT = 50
@@ -56,24 +63,28 @@ SKIP_DIR_NAMES = {
 def search_text(args):
     query = args["query"].strip()
     if not query:
-        return ToolResult(ok=False, error="query must not be empty.")
+        return ToolResult(ok=False, error="query must not be empty.", error_type=ERROR_INVALID_ARGUMENTS)
 
     try:
         path = validate_workspace_path(args.get("path") or ".", operation=PATH_OPERATION_READ)
     except PathSafetyError as exc:
-        return ToolResult(ok=False, error=str(exc))
+        return ToolResult(ok=False, error=str(exc), error_type=ERROR_PERMISSION_DENIED)
 
     if not path.exists():
-        return ToolResult(ok=False, error=f"Path not found: {path}")
+        return ToolResult(ok=False, error=f"Path not found: {path}", error_type=ERROR_NOT_FOUND)
 
     limit = args.get("limit", DEFAULT_SEARCH_LIMIT)
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-        return ToolResult(ok=False, error="limit must be an integer greater than or equal to 1.")
+        return ToolResult(
+            ok=False,
+            error="limit must be an integer greater than or equal to 1.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
     limit = min(limit, MAX_SEARCH_LIMIT)
 
     case_sensitive = args.get("case_sensitive", False)
     if not isinstance(case_sensitive, bool):
-        return ToolResult(ok=False, error="case_sensitive must be a boolean.")
+        return ToolResult(ok=False, error="case_sensitive must be a boolean.", error_type=ERROR_INVALID_ARGUMENTS)
 
     rg_path = shutil.which("rg")
     if rg_path:
@@ -143,12 +154,16 @@ def _search_with_rg(
             _, stderr = process.communicate(timeout=SEARCH_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             process.kill()
-            return ToolResult(ok=False, error=f"search_text timed out after {SEARCH_TIMEOUT_SECONDS} seconds.")
+            return ToolResult(
+                ok=False,
+                error=f"search_text timed out after {SEARCH_TIMEOUT_SECONDS} seconds.",
+                error_type=ERROR_TIMEOUT,
+            )
     except OSError as exc:
-        return ToolResult(ok=False, error=f"Failed to run rg: {exc}")
+        return ToolResult(ok=False, error=f"Failed to run rg: {exc}", error_type=ERROR_EXTERNAL_TOOL)
 
     if process.returncode not in (0, 1, -15):
-        return ToolResult(ok=False, error=f"rg search failed: {stderr.strip()}")
+        return ToolResult(ok=False, error=f"rg search failed: {stderr.strip()}", error_type=ERROR_EXTERNAL_TOOL)
 
     return _search_result(matches, truncated=truncated, backend="rg")
 

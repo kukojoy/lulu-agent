@@ -2,30 +2,33 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
+
+from lulu_agent.runtime.errors import ErrorType
 
 
-EVENT_TURN_START = "turn_start"
-EVENT_USER_MESSAGE = "user_message"
-EVENT_MODEL_REQUEST = "model_request"
-EVENT_ASSISTANT_DELTA = "assistant_delta"
-EVENT_ASSISTANT_MESSAGE = "assistant_message"
-EVENT_TOOL_CALL = "tool_call"
-EVENT_TOOL_RESULT = "tool_result"
-EVENT_ERROR = "error"
-EVENT_TURN_END = "turn_end"
+class RuntimeEventType(StrEnum):
+    TURN_START = "turn_start"
+    USER_MESSAGE = "user_message"
+    MODEL_REQUEST = "model_request"
+    ASSISTANT_DELTA = "assistant_delta"
+    ASSISTANT_MESSAGE = "assistant_message"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    ERROR = "error"
+    TURN_END = "turn_end"
 
-RuntimeEventType = Literal[
-    "turn_start",
-    "user_message",
-    "model_request",
-    "assistant_delta",
-    "assistant_message",
-    "tool_call",
-    "tool_result",
-    "error",
-    "turn_end",
-]
+
+EVENT_TURN_START = RuntimeEventType.TURN_START
+EVENT_USER_MESSAGE = RuntimeEventType.USER_MESSAGE
+EVENT_MODEL_REQUEST = RuntimeEventType.MODEL_REQUEST
+EVENT_ASSISTANT_DELTA = RuntimeEventType.ASSISTANT_DELTA
+EVENT_ASSISTANT_MESSAGE = RuntimeEventType.ASSISTANT_MESSAGE
+EVENT_TOOL_CALL = RuntimeEventType.TOOL_CALL
+EVENT_TOOL_RESULT = RuntimeEventType.TOOL_RESULT
+EVENT_ERROR = RuntimeEventType.ERROR
+EVENT_TURN_END = RuntimeEventType.TURN_END
 
 
 @dataclass(frozen=True)
@@ -105,7 +108,7 @@ class ToolResultPayload:
     ok: bool
     output: Any = None
     error: str | None = None
-    error_type: str | None = None
+    error_type: ErrorType | None = None
     metadata: dict[str, Any] | None = None
     truncated: bool = False
 
@@ -222,7 +225,7 @@ class EventPayloadBuilder:
         ok: bool,
         output: Any = None,
         error: str | None = None,
-        error_type: str | None = None,
+        error_type: ErrorType | None = None,
         metadata: dict[str, Any] | None = None,
         truncated: bool = False,
     ) -> dict[str, Any]:

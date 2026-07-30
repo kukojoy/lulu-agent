@@ -2,9 +2,23 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from lulu_agent.runtime.errors import (
+    ERROR_EXECUTION,
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_OUTPUT_TRUNCATED,
+    ERROR_TIMEOUT,
+    ERROR_UNKNOWN_TOOL,
+    ErrorType,
+    LuluError,
+)
 from lulu_agent.tools.registry import ToolRegistry
 from lulu_agent.tools.tool import Tool, ToolResult
 from lulu_agent.tools.utils import truncate_middle_text
+
+
+class ToolRuntimeError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType = ERROR_INVALID_ARGUMENTS):
+        super().__init__(error_message, error_type)
 
 
 MAX_TOOL_RESULT_JSON_CHARS = 120_000
@@ -16,14 +30,6 @@ JSON_TYPE_CHECKS = {
     "object": dict,
     "string": str,
 }
-
-ERROR_UNKNOWN_TOOL = "unknown_tool"
-ERROR_INVALID_ARGUMENTS = "invalid_arguments"
-ERROR_TIMEOUT = "timeout"
-ERROR_EXECUTION = "execution_error"
-ERROR_EXTERNAL_TOOL = "external_tool_error"
-ERROR_OUTPUT_TRUNCATED = "output_truncated"
-
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -94,12 +100,13 @@ class ToolRuntime:
                 error_type=ERROR_UNKNOWN_TOOL,
             )
 
-        validation_error = _validate_tool_args(tool, tool_call.arguments)
-        if validation_error:
+        try:
+            _validate_tool_args(tool, tool_call.arguments)
+        except ToolRuntimeError as exc:
             return ToolResult(
                 ok=False,
-                error=validation_error,
-                error_type=ERROR_INVALID_ARGUMENTS,
+                error=exc.error_message,
+                error_type=exc.error_type,
             )
 
         try:
@@ -116,6 +123,16 @@ class ToolRuntime:
                 error=str(exc),
                 error_type=ERROR_EXECUTION,
             )
+
+        if not isinstance(result, ToolResult):
+            return ToolResult(
+                ok=False,
+                error="Tool handler must return ToolResult.",
+                error_type=ERROR_EXECUTION,
+            )
+
+        if not result.ok and result.error_type is None:
+            result.error_type = ERROR_EXECUTION
 
         return self._truncate_result(result)
 
@@ -157,14 +174,16 @@ class ToolRuntime:
         )
 
 
-def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
+def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> None:
     parameters = tool.parameters
     required = parameters.get("required", [])
     properties = parameters.get("properties", {})
 
     for name in required:
         if name not in args:
-            return f"Missing required argument '{name}' for tool '{tool.name}'."
+            raise ToolRuntimeError(
+                f"Missing required argument '{name}' for tool '{tool.name}'.",
+            )
 
     for name, value in args.items():
         schema = properties.get(name)
@@ -176,12 +195,10 @@ def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
             continue
 
         if not _matches_json_type(value, expected_type):
-            return (
+            raise ToolRuntimeError(
                 f"Invalid argument '{name}' for tool '{tool.name}': "
                 f"expected {expected_type}, got {_json_type_name(value)}."
             )
-
-    return None
 
 
 def _matches_json_type(value: Any, expected_type: str) -> bool:

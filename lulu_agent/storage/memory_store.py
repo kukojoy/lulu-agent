@@ -11,10 +11,11 @@ import fcntl
 import json
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
 from lulu_agent.tools import truncate_text
 
 
@@ -71,6 +72,38 @@ class MemorySnapshot:
         }
 
 
+@dataclass(frozen=True)
+class MemoryResult:
+    message: str = ""
+    path: str = ""
+    content: str = ""
+    entries: list[MemoryEntry] = field(default_factory=list)
+    truncated: bool = False
+    original_length: int = 0
+    entry: dict = field(default_factory=dict)
+
+    def to_dict(self, fields: tuple[str, ...]) -> dict:
+        data = {
+            "entries": [entry.to_dict() for entry in self.entries],
+            "entry": self.entry,
+        }
+        data.update(
+            {
+                "message": self.message,
+                "path": self.path,
+                "content": self.content,
+                "truncated": self.truncated,
+                "original_length": self.original_length,
+            }
+        )
+        return {field: data[field] for field in fields}
+
+
+class MemoryStoreError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType = ERROR_INVALID_ARGUMENTS):
+        super().__init__(error_message, error_type)
+
+
 class MemoryStore:
     def __init__(
         self,
@@ -104,24 +137,19 @@ class MemoryStore:
             entry_count=len(entries),
         )
 
-    def read(self) -> dict:
+    def read(self) -> MemoryResult:
         """从记忆快照中解析记忆内容
         
         Returns:
             dict: 包含记忆内容和元信息
         """
-        return self._result(True, "Memory read.")
+        return self._result("Memory read.")
 
-    def add(self, kind: str, content: str) -> dict:
+    def add(self, kind: str, content: str) -> MemoryResult:
         """向记忆中添加一条新内容"""
-        kind_error = self._validate_kind(kind)
-        if kind_error:
-            return self._result(False, kind_error)
-
+        self._validate_kind(kind)
         content = content.strip()
-        content_error = self._validate_content(content)
-        if content_error:
-            return self._result(False, content_error)
+        self._validate_content(content)
 
         with self._file_lock():
             entries = self._get_entries()
@@ -133,28 +161,20 @@ class MemoryStore:
             )
             entries.append(entry)
             self._write_entries(entries)
-            return self._result(True, "Entry added.", entry=entry.to_dict())
+            return self._result("Entry added.", entry=entry.to_dict())
 
-    def update(self, entry_id: int, kind: str, content: str) -> dict:
+    def update(self, entry_id: int, kind: str, content: str) -> MemoryResult:
         """按 id 更新记忆条目"""
-        id_error = self._validate_id(entry_id)
-        if id_error:
-            return self._result(False, id_error)
-
-        kind_error = self._validate_kind(kind)
-        if kind_error:
-            return self._result(False, kind_error)
-
+        self._validate_id(entry_id)
+        self._validate_kind(kind)
         content = content.strip()
-        content_error = self._validate_content(content)
-        if content_error:
-            return self._result(False, content_error)
+        self._validate_content(content)
 
         with self._file_lock():
             entries = self._get_entries()
             index = self._find_index_by_id(entries, entry_id)
             if index is None:
-                return self._result(False, f"No memory entry found with id {entry_id}.")
+                raise MemoryStoreError(f"No memory entry found with id {entry_id}.", ERROR_NOT_FOUND)
 
             entry = MemoryEntry(
                 id=entry_id,
@@ -164,23 +184,21 @@ class MemoryStore:
             )
             entries[index] = entry
             self._write_entries(entries)
-            return self._result(True, "Entry updated.", entry=entry.to_dict())
+            return self._result("Entry updated.", entry=entry.to_dict())
 
-    def remove(self, entry_id: int) -> dict:
+    def remove(self, entry_id: int) -> MemoryResult:
         """按 id 删除记忆条目"""
-        id_error = self._validate_id(entry_id)
-        if id_error:
-            return self._result(False, id_error)
+        self._validate_id(entry_id)
 
         with self._file_lock():
             entries = self._get_entries()
             index = self._find_index_by_id(entries, entry_id)
             if index is None:
-                return self._result(False, f"No memory entry found with id {entry_id}.")
+                raise MemoryStoreError(f"No memory entry found with id {entry_id}.", ERROR_NOT_FOUND)
 
             removed = entries.pop(index)
             self._write_entries(entries)
-            return self._result(True, "Entry removed.", entry=removed.to_dict())
+            return self._result("Entry removed.", entry=removed.to_dict())
 
     # === entry ===
     def _get_entries(self) -> list[MemoryEntry]:
@@ -201,17 +219,6 @@ class MemoryStore:
         """将记忆条目列表写入文件"""
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
         self.global_path.write_text(self._serialize_entries(entries), encoding="utf-8")
-
-    @contextmanager
-    def _file_lock(self):
-        lock_path = self.global_path.with_suffix(self.global_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _serialize_entries(self, entries: list[MemoryEntry]) -> str:
         """将记忆条目列表转换为字符串"""
@@ -279,12 +286,10 @@ class MemoryStore:
             return None
 
         entry_id = metadata.get("id")
-        if self._validate_id(entry_id):
-            return None
+        self._validate_id(entry_id)
 
         kind = metadata.get("kind")
-        if self._validate_kind(kind):
-            return None
+        self._validate_kind(kind)
 
         updated_at = self._parse_date(metadata.get("updated_at")) or self._today()
 
@@ -317,23 +322,20 @@ class MemoryStore:
             return None
 
     # === validate ===
-    def _validate_id(self, entry_id: int) -> str | None:
+    def _validate_id(self, entry_id: int) -> None:
         """验证记忆条目 id 为正整数"""
-        if isinstance(entry_id, int) and entry_id > 0:
-            return None
-        return "id must be a positive integer."
-    
-    def _validate_kind(self, kind: str) -> str | None:
-        """验证记忆条目为有效类型"""
-        if kind in VALID_MEMORY_KINDS:
-            return None
-        return "kind must be one of: preference, fact."
+        if not isinstance(entry_id, int) or entry_id <= 0:
+            raise MemoryStoreError("id must be a positive integer.")
 
-    def _validate_content(self, content: str) -> str | None:
+    def _validate_kind(self, kind: str) -> None:
+        """验证记忆条目为有效类型"""
+        if kind not in VALID_MEMORY_KINDS:
+            raise MemoryStoreError("kind must be one of: preference, fact.")
+
+    def _validate_content(self, content: str) -> None:
         """验证记忆内容非空"""
         if not content:
-            return "Memory content must not be empty."
-        return None
+            raise MemoryStoreError("Memory content must not be empty.")
     
     # === utils ===
     def _find_index_by_id(self, entries: list[MemoryEntry], entry_id: int) -> int | None:
@@ -348,32 +350,33 @@ class MemoryStore:
     def _today(self) -> str:
         return datetime.now().astimezone().date().isoformat()
 
-    def _result(self, ok: bool, message: str, **kwargs) -> dict:
-        """返回记忆快照操作状态
+    def _result(self, message: str, **kwargs) -> MemoryResult:
+        """返回记忆操作状态
 
         Args:
-            ok (bool): 操作是否成功
             message (str): 操作状态消息
             **kwargs: 其他附加信息
         """
-        if not ok:
-            return {
-                "ok": ok,
-                "error": message,
-                **kwargs,
-            }
-
         entries = self._get_entries()
         snapshot = self.read_global_memory_snapshot()
 
-        return {
-            "ok": ok,
-            "message": message,
-            "path": snapshot.path,
-            "content": snapshot.content,
-            "entries": [entry.to_dict() for entry in entries],
-            "entry_count": len(entries),
-            "truncated": snapshot.truncated,
-            "original_length": snapshot.original_length,
+        return MemoryResult(
+            message=message,
+            path=snapshot.path,
+            content=snapshot.content,
+            entries=entries,
+            truncated=snapshot.truncated,
+            original_length=snapshot.original_length,
             **kwargs,
-        }
+        )
+
+    @contextmanager
+    def _file_lock(self):
+        lock_path = self.global_path.with_suffix(self.global_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

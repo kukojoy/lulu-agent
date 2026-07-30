@@ -2,6 +2,12 @@ from pathlib import Path
 
 from lulu_agent.runtime.safety import PATH_OPERATION_READ, PathSafetyError, validate_workspace_path
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import (
+    ERROR_EXTERNAL_TOOL,
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_NOT_FOUND,
+    ERROR_PERMISSION_DENIED,
+)
 
 
 DEFAULT_MAX_ENTRIES = 100
@@ -55,7 +61,7 @@ def list_files(args):
     try:
         path = validate_workspace_path(args.get("path") or ".", operation=PATH_OPERATION_READ)
     except PathSafetyError as exc:
-        return ToolResult(ok=False, error=str(exc))
+        return ToolResult(ok=False, error=str(exc), error_type=ERROR_PERMISSION_DENIED)
 
     recursive = args.get("recursive", False)
     include_hidden = args.get("include_hidden", False)
@@ -63,23 +69,27 @@ def list_files(args):
     max_entries = args.get("max_entries", DEFAULT_MAX_ENTRIES)
 
     if not isinstance(recursive, bool):
-        return ToolResult(ok=False, error="recursive must be a boolean.")
+        return ToolResult(ok=False, error="recursive must be a boolean.", error_type=ERROR_INVALID_ARGUMENTS)
     if not isinstance(include_hidden, bool):
-        return ToolResult(ok=False, error="include_hidden must be a boolean.")
+        return ToolResult(ok=False, error="include_hidden must be a boolean.", error_type=ERROR_INVALID_ARGUMENTS)
     if pattern is not None and not isinstance(pattern, str):
-        return ToolResult(ok=False, error="pattern must be a string.")
+        return ToolResult(ok=False, error="pattern must be a string.", error_type=ERROR_INVALID_ARGUMENTS)
     if isinstance(pattern, str) and not pattern.strip():
         pattern = None
     if not isinstance(max_entries, int) or isinstance(max_entries, bool) or max_entries < 1:
-        return ToolResult(ok=False, error="max_entries must be at least 1.")
+        return ToolResult(ok=False, error="max_entries must be at least 1.", error_type=ERROR_INVALID_ARGUMENTS)
 
     if not path.exists():
-        return ToolResult(ok=False, error=f"Path not found: {path}")
+        return ToolResult(ok=False, error=f"Path not found: {path}", error_type=ERROR_NOT_FOUND)
 
     try:
         entries, truncated = _collect_entries(path, recursive, include_hidden, pattern, max_entries)
     except OSError as exc:
-        return ToolResult(ok=False, error=f"Failed to list path {path}: {exc}")
+        return ToolResult(
+            ok=False,
+            error=f"Failed to list path {path}: {exc}",
+            error_type=ERROR_EXTERNAL_TOOL,
+        )
 
     output = {
         "path": str(path),

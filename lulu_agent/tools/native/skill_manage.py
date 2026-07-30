@@ -1,5 +1,6 @@
 from lulu_agent.skills.store import SkillStoreError, SkillStore
 from lulu_agent.tools import ToolResult, tool
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_INVALID_ARGUMENTS
 
 
 @tool(
@@ -65,52 +66,58 @@ def skill_manage(args):
                 return ToolResult(
                     ok=False,
                     error="content is not supported for create. Use description to create a template, then update or patch.",
+                    error_type=ERROR_INVALID_ARGUMENTS,
                 )
             description = args.get("description", "")
             if not description:
-                return ToolResult(ok=False, error="description is required for create.")
+                return ToolResult(ok=False, error="description is required for create.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.create_skill(name, description)
 
         elif action == "update":
             content = args.get("content", "")
             if not content:
-                return ToolResult(ok=False, error="content is required for update.")
+                return ToolResult(ok=False, error="content is required for update.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.update_skill(name, content)
 
         elif action == "patch":
             old_text = args.get("old_text", "")
             new_text = args.get("new_text", "")
             if not old_text:
-                return ToolResult(ok=False, error="old_text is required for patch.")
+                return ToolResult(ok=False, error="old_text is required for patch.", error_type=ERROR_INVALID_ARGUMENTS)
             if new_text == "":
-                return ToolResult(ok=False, error="new_text is required for patch.")
+                return ToolResult(ok=False, error="new_text is required for patch.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.patch_skill(name, old_text, new_text)
 
         elif action == "write_file":
             file_path = args.get("file_path", "")
             file_content = args.get("file_content", "")
             if not file_path:
-                return ToolResult(ok=False, error="file_path is required for write_file.")
+                return ToolResult(ok=False, error="file_path is required for write_file.", error_type=ERROR_INVALID_ARGUMENTS)
             if file_content == "":
-                return ToolResult(ok=False, error="file_content is required for write_file.")
+                return ToolResult(ok=False, error="file_content is required for write_file.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.write_file(name, file_path, file_content)
 
         elif action == "remove_file":
             file_path = args.get("file_path", "")
             if not file_path:
-                return ToolResult(ok=False, error="file_path is required for remove_file.")
+                return ToolResult(ok=False, error="file_path is required for remove_file.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.remove_file(name, file_path)
 
         else:
             return ToolResult(
                 ok=False,
                 error="Unknown skill_manage action. Use one of: create, update, patch, write_file, remove_file.",
+                error_type=ERROR_INVALID_ARGUMENTS,
             )
 
     except SkillStoreError as exc:
-        return ToolResult(ok=False, error=str(exc))
+        return ToolResult(ok=False, error=exc.error_message, error_type=exc.error_type)
     except OSError as exc:
-        return ToolResult(ok=False, error=f"Failed to manage skill: {exc}")
+        return ToolResult(
+            ok=False,
+            error=f"Failed to manage skill: {exc}",
+            error_type=ERROR_EXTERNAL_TOOL,
+        )
 
     if action == "remove_file":
         output = result.to_dict(("name", "path"))

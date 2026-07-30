@@ -219,7 +219,7 @@ class ContextManager:
     def _skill_context_blocks(self) -> list[dict]:
         """从 skill store 读取 skill metadata context block"""
         result = self.skill_store.list_skills()
-        if not result.skills and not result.errors:
+        if not result.skills and not result.load_issues:
             return []
 
         lines = []
@@ -228,12 +228,12 @@ class ContextManager:
         for skill in result.skills:
             lines.append(f"- {skill.name}: {skill.description} ({skill.path})")
 
-        if result.errors:
+        if result.load_issues:
             if lines:
                 lines.append("")
-            lines.append("Skill load errors:")
-            for error in result.errors:
-                lines.append(f"- {error.path}: {error.error}")
+            lines.append("Skill load issues:")
+            for issue in result.load_issues:
+                lines.append(f"- {issue.path}: {issue.issue_message}")
 
         return [
             {
