@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from lulu_agent.memory.utils import truncate_memory_text
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
-from lulu_agent.tools import truncate_text
 
 
 DEFAULT_GLOBAL_MEMORY_PATH = Path.home() / ".lulu" / "memory" / "MEMORY.md"
@@ -128,7 +128,7 @@ class MemoryStore:
         """从记忆文件中读取记忆快照"""
         entries = self._get_entries()
         content = self._render_entries(entries)
-        truncated = truncate_text(content, self.max_chars) # NOTE: truncate_text 为工具层函数, 后期需要考虑解耦
+        truncated = truncate_memory_text(content, self.max_chars)
         return MemorySnapshot(
             path=str(self.global_path.resolve()),
             content=truncated["text"],

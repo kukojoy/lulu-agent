@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.context.manager import ContextManager
 from lulu_agent.core.agent_loop import AgentLoop
-from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.memory.store import MemoryStore
 from lulu_agent.tools import ToolRegistry
 from lulu_agent.tools.native.memory import memory
 from lulu_agent.skills.store import SkillStore

@@ -1,5 +1,5 @@
 from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_INVALID_ARGUMENTS
-from lulu_agent.storage.memory_store import MemoryResult, MemoryStore, MemoryStoreError
+from lulu_agent.memory.store import MemoryResult, MemoryStore, MemoryStoreError
 from lulu_agent.tools import ToolResult, tool
 
 

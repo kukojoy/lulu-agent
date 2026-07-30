@@ -17,7 +17,7 @@ from lulu_agent.llm.client import LLMClient
 from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
 from lulu_agent.server.events import EventHub, HubEventSink
 from lulu_agent.skills.store import SkillStore
-from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.storage.trace_store import TraceStore
 

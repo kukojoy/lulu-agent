@@ -18,7 +18,7 @@ from lulu_agent.context.budget import (
     group_messages_by_turn,
 )
 from lulu_agent.context.inspection import ContextBlockInspection, ContextInspection
-from lulu_agent.storage.memory_store import MemoryStore
+from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.runtime.compression import CompressionRecord
