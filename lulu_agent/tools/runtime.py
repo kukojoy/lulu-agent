@@ -2,15 +2,21 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from lulu_agent.config import config
 from lulu_agent.runtime.errors import (
+    ERROR_APPROVAL_DENIED,
     ERROR_EXECUTION,
     ERROR_INVALID_ARGUMENTS,
     ERROR_OUTPUT_TRUNCATED,
+    ERROR_PERMISSION_DENIED,
     ERROR_TIMEOUT,
     ERROR_UNKNOWN_TOOL,
     ErrorType,
     LuluError,
 )
+from lulu_agent.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL
+from lulu_agent.safety.approval import request_approval
+from lulu_agent.safety.tools import check_tool_call_safety
 from lulu_agent.tools.registry import ToolRegistry
 from lulu_agent.tools.tool import Tool, ToolResult
 from lulu_agent.tools.utils import truncate_middle_text
@@ -88,7 +94,7 @@ class ToolRuntime:
             arguments=arguments,
         )
 
-    def run(self, tool_call: ToolCall) -> ToolResult:
+    def check(self, tool_call: ToolCall) -> ToolResult | None:
         if tool_call.parse_error is not None:
             return tool_call.parse_error
 
@@ -108,6 +114,33 @@ class ToolRuntime:
                 error=exc.error_message,
                 error_type=exc.error_type,
             )
+
+        safety_decision = check_tool_call_safety(
+            tool_call.tool_name,
+            tool_call.arguments,
+            safety_profile=config.safety_profile,
+        )
+        if safety_decision is None:
+            return None
+        if safety_decision.decision == SAFETY_DENY:
+            return ToolResult(
+                ok=False,
+                error=_permission_denied_error(tool_call.tool_name, safety_decision.reason),
+                error_type=ERROR_PERMISSION_DENIED,
+            )
+        if safety_decision.decision == SAFETY_NEEDS_APPROVAL:
+            subject = tool_call.arguments.get("command") or f"{tool_call.tool_name} {tool_call.arguments}"
+            if not request_approval(safety_decision, subject):
+                return ToolResult(
+                    ok=False,
+                    error=_approval_denied_error(tool_call.tool_name, safety_decision.reason),
+                    error_type=ERROR_APPROVAL_DENIED,
+                )
+
+        return None
+
+    def run(self, tool_call: ToolCall) -> ToolResult:
+        tool = self.registry.get(tool_call.tool_name)
 
         try:
             result = tool.handler(tool_call.arguments)
@@ -231,3 +264,11 @@ def _json_type_name(value: Any) -> str:
     if value is None:
         return "null"
     return type(value).__name__
+
+
+def _permission_denied_error(tool_name: str, reason: str) -> str:
+    return f"Tool {tool_name} was denied by safety policy: {reason}"
+
+
+def _approval_denied_error(tool_name: str, reason: str) -> str:
+    return f"Tool {tool_name} required user's approval but was denied: {reason}"

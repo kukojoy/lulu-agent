@@ -14,7 +14,9 @@ from lulu_agent.interaction import (
     TraceInteractionService,
 )
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.safety.approval import ApprovalProvider, ApprovalRequest, use_approval_provider
 from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
+from lulu_agent.runtime.events import EVENT_APPROVAL_REQUEST, EventPayloadBuilder, RuntimeEvent
 from lulu_agent.server.events import EventHub, HubEventSink
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.memory.store import MemoryStore
@@ -26,6 +28,53 @@ class ServerRunnerError(RuntimeError):
     def __init__(self, message: str, code: str):
         super().__init__(message)
         self.code = code
+
+
+class ServerApprovalProvider(ApprovalProvider):
+    def __init__(self, event_hub: EventHub, session_id: str, timeout_seconds: int = 300):
+        self.event_hub = event_hub
+        self.session_id = session_id
+        self.timeout_seconds = timeout_seconds
+        self._lock = threading.Lock()
+        self._pending: dict[str, queue.Queue[bool]] = {}
+
+    def request_approval(self, request: ApprovalRequest) -> bool:
+        response_queue: queue.Queue[bool] = queue.Queue(maxsize=1)
+        with self._lock:
+            self._pending[request.request_id] = response_queue
+
+        self.event_hub.publish(
+            self.session_id,
+            RuntimeEvent(
+                type=EVENT_APPROVAL_REQUEST,
+                turn_id="",
+                payload=EventPayloadBuilder.build_approval_request_payload(
+                    request_id=request.request_id,
+                    category=request.category,
+                    reason=request.reason,
+                    subject=request.subject,
+                ),
+            ),
+        )
+
+        try:
+            return response_queue.get(timeout=self.timeout_seconds)
+        except queue.Empty:
+            return False
+        finally:
+            with self._lock:
+                self._pending.pop(request.request_id, None)
+
+    def resolve(self, request_id: str, approved: bool) -> bool:
+        with self._lock:
+            response_queue = self._pending.get(request_id)
+        if response_queue is None:
+            return False
+        try:
+            response_queue.put_nowait(bool(approved))
+        except queue.Full:
+            return False
+        return True
 
 
 class ServerRunner:
@@ -47,6 +96,7 @@ class ServerRunner:
         self.trace_service = TraceInteractionService(self.trace_store)
         self._agents: dict[str, AgentLoop] = {}
         self._locks: dict[str, threading.Lock] = {}
+        self._approval_providers: dict[str, ServerApprovalProvider] = {}
         self._lock = threading.Lock()
 
     def create_session(self) -> dict[str, Any]:
@@ -72,6 +122,7 @@ class ServerRunner:
         with self._lock:
             self._agents.pop(session_id, None)
             self._locks.pop(session_id, None)
+            self._approval_providers.pop(session_id, None)
         return metadata
 
     def subscribe_events(self, session_id: str) -> queue.Queue[dict[str, Any]]:
@@ -119,13 +170,18 @@ class ServerRunner:
         if not lock.acquire(blocking=False):
             raise ServerRunnerError("session is already running.", code="session_running")
         try:
-            response = agent.run(content.strip())
+            with use_approval_provider(self._approval_provider_for_session(session_id)):
+                response = agent.run(content.strip())
         finally:
             lock.release()
         return {
             "session_id": session_id,
             "response": response,
         }
+
+    def resolve_approval(self, session_id: str, request_id: str, approved: bool) -> bool:
+        self.session_service.resume_session(session_id)
+        return self._approval_provider_for_session(session_id).resolve(request_id, approved)
 
     def _agent_for_session(self, session_id: str) -> AgentLoop:
         self.session_service.resume_session(session_id)
@@ -153,3 +209,11 @@ class ServerRunner:
                 lock = threading.Lock()
                 self._locks[session_id] = lock
             return lock
+
+    def _approval_provider_for_session(self, session_id: str) -> ServerApprovalProvider:
+        with self._lock:
+            provider = self._approval_providers.get(session_id)
+            if provider is None:
+                provider = ServerApprovalProvider(self.event_hub, session_id)
+                self._approval_providers[session_id] = provider
+            return provider

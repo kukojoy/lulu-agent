@@ -218,9 +218,57 @@ def create_app(runner: ServerRunner | None = None):
                     continue
                 await websocket.send_json(event)
 
+        run_tasks: set[asyncio.Task] = set()
+
+        async def run_user_message(content: Any) -> None:
+            try:
+                await asyncio.to_thread(runner.run_message, session_id, content)
+            except (ValueError, SessionStoreError, ConfigError) as exc:
+                code = "server_error"
+                if isinstance(exc, ValueError):
+                    code = "invalid_message"
+                elif isinstance(exc, SessionStoreError):
+                    code = "session_not_found"
+                elif isinstance(exc, ConfigError):
+                    code = "config_error"
+                await websocket.send_json(
+                    {
+                        "type": "server_error",
+                        "turn_id": "",
+                        "timestamp": "",
+                        "payload": {"message": str(exc), "code": code},
+                    }
+                )
+            except ServerRunnerError as exc:
+                await websocket.send_json(
+                    {
+                        "type": "server_error",
+                        "turn_id": "",
+                        "timestamp": "",
+                        "payload": {"message": str(exc), "code": exc.code},
+                    }
+                )
+
         async def receive_commands() -> None:
             while True:
                 command = await websocket.receive_json()
+                if command.get("type") == "approval_response":
+                    request_id = str(command.get("request_id") or "")
+                    approved = bool(command.get("approved"))
+                    if not request_id or not runner.resolve_approval(session_id, request_id, approved):
+                        await websocket.send_json(
+                            {
+                                "type": "server_error",
+                                "turn_id": "",
+                                "timestamp": "",
+                                "payload": {
+                                    "message": "Approval request not found.",
+                                    "code": "approval_not_found",
+                                },
+                            }
+                        )
+                    continue
+
                 if command.get("type") != "user_message":
                     await websocket.send_json(
                         {
@@ -235,33 +283,9 @@ def create_app(runner: ServerRunner | None = None):
                     )
                     continue
                 content = command.get("content")
-                try:
-                    await asyncio.to_thread(runner.run_message, session_id, content)
-                except (ValueError, SessionStoreError, ConfigError) as exc:
-                    code = "server_error"
-                    if isinstance(exc, ValueError):
-                        code = "invalid_message"
-                    elif isinstance(exc, SessionStoreError):
-                        code = "session_not_found"
-                    elif isinstance(exc, ConfigError):
-                        code = "config_error"
-                    await websocket.send_json(
-                        {
-                            "type": "server_error",
-                            "turn_id": "",
-                            "timestamp": "",
-                            "payload": {"message": str(exc), "code": code},
-                        }
-                    )
-                except ServerRunnerError as exc:
-                    await websocket.send_json(
-                        {
-                            "type": "server_error",
-                            "turn_id": "",
-                            "timestamp": "",
-                            "payload": {"message": str(exc), "code": exc.code},
-                        }
-                    )
+                task = asyncio.create_task(run_user_message(content))
+                run_tasks.add(task)
+                task.add_done_callback(run_tasks.discard)
 
         send_task = asyncio.create_task(send_events())
         receive_task = asyncio.create_task(receive_commands())
@@ -279,6 +303,8 @@ def create_app(runner: ServerRunner | None = None):
         finally:
             send_task.cancel()
             receive_task.cancel()
+            for task in run_tasks:
+                task.cancel()
             runner.unsubscribe_events(session_id, subscriber)
 
     return app

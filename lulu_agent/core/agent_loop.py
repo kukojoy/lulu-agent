@@ -23,9 +23,10 @@ from lulu_agent.runtime.events import (
     RuntimeEvent,
 )
 from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
+from lulu_agent.runtime.errors import ERROR_APPROVAL_DENIED
 from lulu_agent.runtime.turn import TurnRuntime
 from lulu_agent.storage.session_store import SessionStore
-from lulu_agent.tools import ToolRegistry, create_tool_registry
+from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 from lulu_agent.tools.runtime import ToolCall, ToolRuntime
 
 
@@ -41,6 +42,10 @@ For shell-based file operations, do not rely only on exit code. Check cwd and ve
 When the task is complete, answer clearly and briefly."""
 
 INTERRUPTED_MESSAGE = "Current turn interrupted. You can continue with a new message."
+APPROVAL_DENIED_MESSAGE = (
+    "Operation cancelled. You denied the required approval, so I will not try another way "
+    "to perform the same operation."
+)
 
 
 class AgentLoop:
@@ -148,7 +153,17 @@ class AgentLoop:
                     return result.final_response
                     
                 for tool_call in tool_calls:
-                    self._append_tool_message(self._handle_tool_call(tool_call))
+                    tool_message, tool_result = self._handle_tool_call(tool_call)
+                    self._append_tool_message(tool_message)
+                    if not tool_result.ok and tool_result.error_type == ERROR_APPROVAL_DENIED:
+                        self.current_turn.interrupt(APPROVAL_DENIED_MESSAGE, reason="approval_denied")
+                        self._emit(
+                            EVENT_ERROR,
+                            self.current_turn.turn_id,
+                            EventPayloadBuilder.build_error_payload(APPROVAL_DENIED_MESSAGE),
+                        )
+                        turn_result = self._finalize_turn(APPROVAL_DENIED_MESSAGE)
+                        return turn_result.final_response
 
             message = "Reached max turns before completing the task."
 
@@ -331,7 +346,7 @@ class AgentLoop:
     def _handle_tool_call(
         self,
         raw_tool_call,
-    ) -> dict:
+    ) -> tuple[dict, ToolResult]:
         tool_call = self.tool_runtime.decode(raw_tool_call)
         turn = self._active_turn()
         
@@ -348,7 +363,11 @@ class AgentLoop:
         )
         # === event emit and turn state update ===
 
-        result = self.tool_runtime.run(self._tool_call_with_runtime_args(tool_call))
+        check_result = self.tool_runtime.check(tool_call)
+        if check_result is not None:
+            result = check_result
+        else:
+            result = self.tool_runtime.run(self._tool_call_with_runtime_args(tool_call))
 
         # === event emit and turn state update ===
         self._emit(
@@ -372,7 +391,7 @@ class AgentLoop:
             "role": "tool",
             "tool_call_id": tool_call.tool_call_id,
             "content": result.to_json(),
-        }
+        }, result
 
     def _tool_call_with_runtime_args(self, tool_call: ToolCall) -> ToolCall:
         """必要时为特定工具添加 runtime 参数, 例如 session_store/session_id"""

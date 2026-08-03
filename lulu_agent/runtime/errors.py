@@ -9,6 +9,7 @@ class ErrorType(StrEnum):
     EXTERNAL_TOOL = "external_tool_error"
     OUTPUT_TRUNCATED = "output_truncated"
     PERMISSION_DENIED = "permission_denied"
+    APPROVAL_DENIED = "approval_denied"
     NOT_FOUND = "not_found"
 
 
@@ -19,6 +20,7 @@ ERROR_EXECUTION = ErrorType.EXECUTION
 ERROR_EXTERNAL_TOOL = ErrorType.EXTERNAL_TOOL
 ERROR_OUTPUT_TRUNCATED = ErrorType.OUTPUT_TRUNCATED
 ERROR_PERMISSION_DENIED = ErrorType.PERMISSION_DENIED
+ERROR_APPROVAL_DENIED = ErrorType.APPROVAL_DENIED
 ERROR_NOT_FOUND = ErrorType.NOT_FOUND
 
 ERROR_TYPES = frozenset(ErrorType)

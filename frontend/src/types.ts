@@ -23,6 +23,15 @@ export type SessionInspection = {
   compression_count?: number;
   task_state_count?: number;
   messages: TranscriptMessage[];
+  turns?: TurnInspection[];
+};
+
+export type TurnInspection = {
+  turn_id: string;
+  status: string;
+  exit_reason?: string | null;
+  error?: string | null;
+  final_response?: string;
 };
 
 export type TaskStep = {
@@ -111,6 +120,13 @@ export type RuntimeEvent = {
   payload: Record<string, unknown>;
 };
 
+export type ApprovalRequestView = {
+  request_id: string;
+  category: string;
+  reason: string;
+  subject: string;
+};
+
 export type ToolCallView = {
   id?: string;
   toolName: string;
@@ -120,7 +136,7 @@ export type ToolCallView = {
 export type ChatItem =
   | {
       id: string;
-      kind: "user" | "assistant";
+      kind: "user" | "assistant" | "runtime_error";
       content: string;
     }
   | {

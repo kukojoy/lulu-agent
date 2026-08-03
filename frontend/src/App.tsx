@@ -31,6 +31,7 @@ import {
   readSkill,
 } from "./api";
 import type {
+  ApprovalRequestView,
   ChatItem,
   MemoryView,
   RuntimeState,
@@ -117,6 +118,19 @@ function runtimeStateFromPayload(value: unknown): RuntimeState | null {
   };
 }
 
+function approvalRequestFromPayload(payload: Record<string, unknown>): ApprovalRequestView | null {
+  const requestId = payload.request_id;
+  if (typeof requestId !== "string" || !requestId) {
+    return null;
+  }
+  return {
+    request_id: requestId,
+    category: String(payload.category ?? "approval"),
+    reason: String(payload.reason ?? ""),
+    subject: String(payload.subject ?? ""),
+  };
+}
+
 function formatServerError(payload: Record<string, unknown>): string {
   const message = String(payload.message ?? "Event stream error");
   const code = typeof payload.code === "string" ? payload.code : "";
@@ -134,6 +148,9 @@ function formatServerError(payload: Record<string, unknown>): string {
   }
   if (code === "config_error") {
     return `Configuration error: ${message}`;
+  }
+  if (code === "approval_not_found") {
+    return "Approval request is no longer pending.";
   }
   return message;
 }
@@ -317,20 +334,33 @@ function MarkdownContent({ content }: { content: string }) {
   return <div className="markdown-body">{blocks.length ? blocks : <p>[empty]</p>}</div>;
 }
 
-function transcriptToChatItems(messages: TranscriptMessage[]): ChatItem[] {
-  return messages
-    .filter((message) => message.role !== "system")
-    .map((message, index) => {
+function transcriptToChatItems(messages: TranscriptMessage[], inspection: SessionInspection | null): ChatItem[] {
+  const approvalDeniedTurns = new Map(
+    (inspection?.turns ?? [])
+      .filter((turn) => turn.exit_reason === "approval_denied")
+      .map((turn) => [turn.turn_id, turn.final_response || turn.error || "Operation cancelled."]),
+  );
+  const lastMessageIndexByTurn = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (message.turn_id) {
+      lastMessageIndexByTurn.set(message.turn_id, index);
+    }
+  });
+
+  return messages.flatMap((message, index) => {
+      if (message.role === "system") {
+        return [];
+      }
       const id = `${message.turn_id ?? "message"}-${message.tool_call_id ?? message.role ?? "item"}-${index}`;
+      let item: ChatItem;
       if (message.role === "tool") {
-        return {
+        item = {
           id,
           kind: "tool_result",
           title: `Tool result${message.tool_call_id ? ` · ${message.tool_call_id}` : ""}`,
           toolResult: parseJsonValue(message.content),
         };
-      }
-      if (message.role === "assistant" && message.tool_calls?.length) {
+      } else if (message.role === "assistant" && message.tool_calls?.length) {
         const toolCalls: ToolCallView[] = message.tool_calls.map((toolCall) => {
           const candidate = toolCall as {
             id?: string;
@@ -345,19 +375,33 @@ function transcriptToChatItems(messages: TranscriptMessage[]): ChatItem[] {
             arguments: parseJsonValue(candidate.function?.arguments),
           };
         });
-        return {
+        item = {
           id,
           kind: "tool_call",
           title: `Tool call · ${message.tool_calls.length}`,
           assistantContent: typeof message.content === "string" ? message.content : "",
           toolCalls,
         };
+      } else {
+        item = {
+          id,
+          kind: message.role === "assistant" ? "assistant" : "user",
+          content: typeof message.content === "string" ? message.content : "",
+        };
       }
-      return {
-        id,
-        kind: message.role === "assistant" ? "assistant" : "user",
-        content: typeof message.content === "string" ? message.content : "",
-      };
+
+      const runtimeError = message.turn_id ? approvalDeniedTurns.get(message.turn_id) : "";
+      if (runtimeError && lastMessageIndexByTurn.get(message.turn_id ?? "") === index) {
+        return [
+          item,
+          {
+            id: `${message.turn_id}-approval-denied`,
+            kind: "runtime_error",
+            content: runtimeError,
+          },
+        ];
+      }
+      return [item];
     });
 }
 
@@ -381,6 +425,7 @@ export function App() {
   const [error, setError] = useState("");
   const [eventStreamReady, setEventStreamReady] = useState(false);
   const [streamingMessage, setStreamingMessage] = useState("");
+  const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestView | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -455,6 +500,7 @@ export function App() {
   const clearLiveTurnState = useCallback(() => {
     setStreamingMessage("");
     setLiveToolItems([]);
+    setApprovalRequest(null);
     pendingToolReasoningRef.current = "";
   }, []);
 
@@ -545,11 +591,29 @@ export function App() {
         setBusy(false);
         return;
       }
+      if (event.type === "error") {
+        setLiveToolItems((current) => [
+          ...current,
+          {
+            id: `live-${event.turn_id}-error-${current.length}`,
+            kind: "runtime_error",
+            content: String(event.payload.message ?? "Agent runtime error"),
+          },
+        ]);
+        return;
+      }
       if (event.type === "assistant_delta") {
         if (activeSessionId) {
           setRuntimeState({ session_id: activeSessionId, running: true, connected: true });
         }
         appendStreamingDelta(String(event.payload.delta ?? ""));
+        return;
+      }
+      if (event.type === "approval_request") {
+        const request = approvalRequestFromPayload(event.payload);
+        if (request) {
+          setApprovalRequest(request);
+        }
         return;
       }
       if (event.type === "assistant_message") {
@@ -641,7 +705,7 @@ export function App() {
     runSessionMessage,
   ]);
 
-  const chatItems = useMemo(() => transcriptToChatItems(messages), [messages]);
+  const chatItems = useMemo(() => transcriptToChatItems(messages, inspection), [inspection, messages]);
   const visibleChatItems = useMemo(() => [...chatItems, ...liveToolItems], [chatItems, liveToolItems]);
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const lastAssistantContent = useMemo(() => {
@@ -733,6 +797,20 @@ export function App() {
       pendingSentMessageRef.current = "";
       setBusy(false);
     }
+  }
+
+  function respondToApproval(approved: boolean) {
+    if (!approvalRequest || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socketRef.current.send(
+      JSON.stringify({
+        type: "approval_response",
+        request_id: approvalRequest.request_id,
+        approved,
+      }),
+    );
+    setApprovalRequest(null);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -844,10 +922,28 @@ export function App() {
           </div>
         )}
 
+        {approvalRequest && (
+          <div className="approval-banner">
+            <div>
+              <strong>Approval required</strong>
+              <p>{approvalRequest.reason}</p>
+              <code>{approvalRequest.subject}</code>
+            </div>
+            <div className="approval-actions">
+              <button className="approval-deny" type="button" onClick={() => respondToApproval(false)}>
+                Deny
+              </button>
+              <button className="approval-allow" type="button" onClick={() => respondToApproval(true)}>
+                Approve
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="chat-list">
           {visibleChatItems.map((item) => (
             <article className={`chat-message ${item.kind}`} key={item.id}>
-              <div className="message-role">{item.kind.replace("_", " ")}</div>
+              <div className="message-role">{item.kind === "runtime_error" ? "runtime" : item.kind.replace("_", " ")}</div>
               {item.kind === "tool_call" || item.kind === "tool_result" ? (
                 (() => {
                   const reasoning = item.kind === "tool_call" ? item.assistantContent.trim() : "";

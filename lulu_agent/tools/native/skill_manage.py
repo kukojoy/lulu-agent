@@ -59,6 +59,12 @@ def skill_manage(args):
     store = SkillStore()
     action = args["action"]
     name = args["name"]
+    if action not in {"create", "update", "patch", "write_file", "remove_file"}:
+        return ToolResult(
+            ok=False,
+            error="Unknown skill_manage action. Use one of: create, update, patch, write_file, remove_file.",
+            error_type=ERROR_INVALID_ARGUMENTS,
+        )
 
     try:
         if action == "create":
@@ -102,13 +108,6 @@ def skill_manage(args):
             if not file_path:
                 return ToolResult(ok=False, error="file_path is required for remove_file.", error_type=ERROR_INVALID_ARGUMENTS)
             result = store.remove_file(name, file_path)
-
-        else:
-            return ToolResult(
-                ok=False,
-                error="Unknown skill_manage action. Use one of: create, update, patch, write_file, remove_file.",
-                error_type=ERROR_INVALID_ARGUMENTS,
-            )
 
     except SkillStoreError as exc:
         return ToolResult(ok=False, error=exc.error_message, error_type=exc.error_type)

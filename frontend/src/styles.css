@@ -300,6 +300,57 @@ h2 {
   font-size: 14px;
 }
 
+.approval-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #e6d7b8;
+  background: #fff8e8;
+  color: #4f3d16;
+}
+
+.approval-banner p {
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.approval-banner code {
+  display: block;
+  max-width: min(720px, 62vw);
+  margin-top: 6px;
+  overflow: hidden;
+  color: #263244;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.approval-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 7px;
+}
+
+.approval-deny {
+  border: 1px solid #dab1b1;
+  background: #fff3f3;
+  color: #8a2626;
+}
+
+.approval-allow {
+  border: 1px solid #1b6fb8;
+  background: #1b6fb8;
+  color: #ffffff;
+}
+
 .chat-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -320,6 +371,12 @@ h2 {
 .chat-message.assistant {
   border-color: #c8d8e8;
   background: #f6fbff;
+}
+
+.chat-message.runtime_error {
+  border-color: #f1c9c9;
+  background: #fff5f5;
+  color: #8f2424;
 }
 
 .chat-message.tool_call,

@@ -14,6 +14,7 @@ class RuntimeEventType(StrEnum):
     MODEL_REQUEST = "model_request"
     ASSISTANT_DELTA = "assistant_delta"
     ASSISTANT_MESSAGE = "assistant_message"
+    APPROVAL_REQUEST = "approval_request"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     ERROR = "error"
@@ -25,6 +26,7 @@ EVENT_USER_MESSAGE = RuntimeEventType.USER_MESSAGE
 EVENT_MODEL_REQUEST = RuntimeEventType.MODEL_REQUEST
 EVENT_ASSISTANT_DELTA = RuntimeEventType.ASSISTANT_DELTA
 EVENT_ASSISTANT_MESSAGE = RuntimeEventType.ASSISTANT_MESSAGE
+EVENT_APPROVAL_REQUEST = RuntimeEventType.APPROVAL_REQUEST
 EVENT_TOOL_CALL = RuntimeEventType.TOOL_CALL
 EVENT_TOOL_RESULT = RuntimeEventType.TOOL_RESULT
 EVENT_ERROR = RuntimeEventType.ERROR
@@ -95,6 +97,14 @@ class AssistantMessagePayload:
 
 
 @dataclass(frozen=True)
+class ApprovalRequestPayload:
+    request_id: str
+    category: str
+    reason: str
+    subject: str
+
+
+@dataclass(frozen=True)
 class ToolCallPayload:
     tool_call_id: str
     tool_name: str
@@ -133,6 +143,7 @@ RuntimeEventPayload = (
     | ModelRequestPayload
     | AssistantDeltaPayload
     | AssistantMessagePayload
+    | ApprovalRequestPayload
     | ToolCallPayload
     | ToolResultPayload
     | ErrorPayload
@@ -146,6 +157,7 @@ EVENT_PAYLOAD_MODELS: dict[str, type[RuntimeEventPayload]] = {
     EVENT_MODEL_REQUEST: ModelRequestPayload,
     EVENT_ASSISTANT_DELTA: AssistantDeltaPayload,
     EVENT_ASSISTANT_MESSAGE: AssistantMessagePayload,
+    EVENT_APPROVAL_REQUEST: ApprovalRequestPayload,
     EVENT_TOOL_CALL: ToolCallPayload,
     EVENT_TOOL_RESULT: ToolResultPayload,
     EVENT_ERROR: ErrorPayload,
@@ -201,6 +213,22 @@ class EventPayloadBuilder:
                 final=final,
                 streamed=streamed,
                 usage=usage,
+            )
+        )
+
+    @staticmethod
+    def build_approval_request_payload(
+        request_id: str,
+        category: str,
+        reason: str,
+        subject: str,
+    ) -> dict[str, Any]:
+        return payload_to_dict(
+            ApprovalRequestPayload(
+                request_id=request_id,
+                category=category,
+                reason=reason,
+                subject=subject,
             )
         )
 

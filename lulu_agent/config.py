@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from lulu_agent.safety import DEFAULT_SAFETY_PROFILE, validate_safety_profile
+
 load_dotenv()
 
 
@@ -20,12 +22,16 @@ class Config:
     # 网络搜索服务 (optional)
     tavily_api_key: str
 
+    # 安全档位
+    safety_profile: str = DEFAULT_SAFETY_PROFILE
+
 def load_config() -> Config:
     return Config(
         openai_api_key=os.getenv("OPENAI_API_KEY") or "",
         openai_base_url=os.getenv("OPENAI_BASE_URL") or "",
         openai_model=os.getenv("OPENAI_MODEL") or "",
         tavily_api_key=os.getenv("TAVILY_API_KEY") or "",
+        safety_profile=os.getenv("LULU_SAFETY_PROFILE") or DEFAULT_SAFETY_PROFILE,
     )
 
 
@@ -41,6 +47,11 @@ def validate_config(config: Config) -> None:
     if missing:
         names = ", ".join(missing)
         raise ConfigError(f"Missing required environment variable(s): {names}")
+
+    try:
+        validate_safety_profile(config.safety_profile)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 config = load_config()

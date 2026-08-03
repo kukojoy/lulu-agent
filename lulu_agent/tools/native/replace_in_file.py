@@ -1,10 +1,9 @@
-from lulu_agent.runtime.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
+from lulu_agent.safety.utils import resolve_path
 from lulu_agent.tools import ToolResult, tool
 from lulu_agent.runtime.errors import (
     ERROR_EXTERNAL_TOOL,
     ERROR_INVALID_ARGUMENTS,
     ERROR_NOT_FOUND,
-    ERROR_PERMISSION_DENIED,
 )
 
 
@@ -39,10 +38,7 @@ from lulu_agent.runtime.errors import (
     },
 )
 def replace_in_file(args):
-    try:
-        path = validate_workspace_path(args["path"], operation=PATH_OPERATION_WRITE)
-    except PathSafetyError as exc:
-        return ToolResult(ok=False, error=str(exc), error_type=ERROR_PERMISSION_DENIED)
+    path = resolve_path(args["path"])
 
     old_string = args["old_string"]
     new_string = args["new_string"]

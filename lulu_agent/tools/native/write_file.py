@@ -1,6 +1,6 @@
-from lulu_agent.runtime.safety import PATH_OPERATION_WRITE, PathSafetyError, validate_workspace_path
+from lulu_agent.safety.utils import resolve_path
 from lulu_agent.tools import ToolResult, tool
-from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_PERMISSION_DENIED
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL
 
 
 @tool(
@@ -22,10 +22,7 @@ from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_PERMISSION_DENI
     },
 )
 def write_file(args):
-    try:
-        path = validate_workspace_path(args["path"], operation=PATH_OPERATION_WRITE)
-    except PathSafetyError as exc:
-        return ToolResult(ok=False, error=str(exc), error_type=ERROR_PERMISSION_DENIED)
+    path = resolve_path(args["path"])
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

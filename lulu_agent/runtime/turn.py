@@ -20,6 +20,7 @@ TurnExitReason = Literal[
     "model_error",
     "tool_error",
     "stream_error",
+    "approval_denied",
     "user_interrupted",
     "unknown_error",
 ]
@@ -115,9 +116,9 @@ class TurnRuntime:
         self.exit_reason = reason
         self.error = error
 
-    def interrupt(self, error: str = "Interrupted by user.") -> None:
+    def interrupt(self, error: str = "Interrupted by user.", reason: TurnExitReason = "user_interrupted") -> None:
         self.status = "interrupted"
-        self.exit_reason = "user_interrupted"
+        self.exit_reason = reason
         self.error = error
 
     def to_record(self, final_response: str = "") -> TurnRecord:
