@@ -8,10 +8,12 @@ from lulu_agent.interaction.formatters import (
     format_session_inspection,
     format_sessions,
 )
-from lulu_agent.runtime.cli_input import read_user_input, setup_line_editing
+from cli.input import read_user_input, setup_line_editing
+from cli.approval_provider import CliApprovalProvider
 from lulu_agent.config import ConfigError
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.runtime.event_sinks import CliEventSink, CompositeEventSink, PersistentEventSink
+from lulu_agent.safety.approval import use_approval_provider
 from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
 from lulu_agent.memory.review import MemoryReviewer
@@ -144,7 +146,8 @@ def main(argv: list[str] | None = None):
             break
 
         try:
-            response = agent.run(user_input)
+            with use_approval_provider(CliApprovalProvider()):
+                response = agent.run(user_input)
         except Exception as exc:
             print(f"[Main Error] {exc}")
             continue

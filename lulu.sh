@@ -33,8 +33,8 @@ else
   exit 1
 fi
 
-if [ ! -d "$ROOT_DIR/frontend/node_modules" ]; then
-  echo "frontend/node_modules is missing. Run: cd frontend && npm install" >&2
+if [ ! -d "$ROOT_DIR/gui/node_modules" ]; then
+  echo "gui/node_modules is missing. Run: cd gui && npm install" >&2
   exit 1
 fi
 
@@ -47,7 +47,7 @@ cleanup() {
   fi
 }
 
-open_frontend_when_ready() {
+open_gui_when_ready() {
   local url="http://127.0.0.1:${FRONTEND_PORT}"
   if ! command -v open >/dev/null 2>&1; then
     return
@@ -69,15 +69,15 @@ echo "Starting lulu-agent backend: http://${BACKEND_HOST}:${BACKEND_PORT}"
   --port "$BACKEND_PORT" &
 BACKEND_PID=$!
 
-echo "Starting lulu-agent frontend: http://127.0.0.1:${FRONTEND_PORT}"
-"${NPM_CMD[@]}" run dev --prefix frontend -- --port "$FRONTEND_PORT" --strictPort &
+echo "Starting lulu-agent GUI: http://127.0.0.1:${FRONTEND_PORT}"
+"${NPM_CMD[@]}" run dev --prefix gui -- --port "$FRONTEND_PORT" --strictPort &
 FRONTEND_PID=$!
 
 echo "lulu-agent GUI is starting."
 echo "Open: http://127.0.0.1:${FRONTEND_PORT}"
 echo "Press Ctrl+C to stop both processes."
 
-open_frontend_when_ready &
+open_gui_when_ready &
 OPEN_PID=$!
 
 while true; do

@@ -2,7 +2,7 @@
 
 `lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI 和 CLI 两种入口，可以在本机完成对话、调用工具、读写文件、执行命令、维护长期记忆和复用技能。
 
-当前状态：`v3.0 completed`。
+当前状态：`v3.2 completed`。
 
 ## 主要能力
 
@@ -25,10 +25,10 @@
 pip install -r requirements.txt
 ```
 
-如果使用 Web GUI，还需要安装前端依赖：
+如果使用 Web GUI，还需要安装 GUI 依赖：
 
 ```bash
-cd frontend
+cd gui
 npm install
 ```
 
@@ -82,9 +82,9 @@ TAVILY_API_KEY=
 默认地址：
 
 - 后端：`http://127.0.0.1:8000`
-- 前端：`http://127.0.0.1:5173`
+- GUI：`http://127.0.0.1:5173`
 
-`lulu.sh` 会同时启动后端和前端，并在可用环境中自动打开浏览器。按 `Ctrl+C` 会停止两个进程。
+`lulu.sh` 会同时启动后端和 GUI，并在可用环境中自动打开浏览器。按 `Ctrl+C` 会停止两个进程。
 
 可选环境变量：
 
@@ -101,7 +101,7 @@ LULU_PYTHON=/path/to/python
 启动：
 
 ```bash
-python -m lulu_agent.main
+python -m cli.main
 ```
 
 退出：
@@ -114,25 +114,25 @@ python -m lulu_agent.main
 恢复会话：
 
 ```bash
-python -m lulu_agent.main --resume <session_id>
+python -m cli.main --resume <session_id>
 ```
 
 列出近期会话：
 
 ```bash
-python -m lulu_agent.main --list-sessions
+python -m cli.main --list-sessions
 ```
 
 查看会话信息：
 
 ```bash
-python -m lulu_agent.main --inspect-session <session_id>
+python -m cli.main --inspect-session <session_id>
 ```
 
 查看拼接后的 system/context：
 
 ```bash
-python -m lulu_agent.main --inspect-context <session_id>
+python -m cli.main --inspect-context <session_id>
 ```
 
 ## 本地数据

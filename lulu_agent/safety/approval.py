@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
-from lulu_agent.runtime.cli_input import read_user_input
 from lulu_agent.safety import SafetyDecision
 
 
@@ -31,24 +30,11 @@ class ApprovalProvider(Protocol):
         pass
 
 
-class CliApprovalProvider(ApprovalProvider):
-    def request_approval(self, request: ApprovalRequest) -> bool:
-        print()
-        print("[approval required]")
-        print(f"category: {request.category}")
-        print(f"reason: {request.reason}")
-        print(f"subject: {request.subject}")
-        try:
-            answer = read_user_input("Allow once? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt, OSError):
-            return False
-        return answer in {"y", "yes"}
-
-
-_approval_provider: contextvars.ContextVar[ApprovalProvider] = contextvars.ContextVar(
+_approval_provider: contextvars.ContextVar[ApprovalProvider | None] = contextvars.ContextVar(
     "approval_provider",
-    default=CliApprovalProvider(),
+    default=None,
 )
+
 
 def request_approval(decision: SafetyDecision, subject: str) -> bool:
     request = ApprovalRequest(
@@ -57,7 +43,11 @@ def request_approval(decision: SafetyDecision, subject: str) -> bool:
         reason=decision.reason,
         subject=subject,
     )
-    return _approval_provider.get().request_approval(request)
+    provider = _approval_provider.get()
+    if provider is None:
+        return False
+    return provider.request_approval(request)
+
 
 @contextmanager
 def use_approval_provider(provider: ApprovalProvider):

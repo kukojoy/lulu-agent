@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
 
 
-CompressionScope = Literal["turn_range", "full_history"]
+class CompressionScope(StrEnum):
+    TURN_RANGE = "turn_range"
+    FULL_HISTORY = "full_history"
 
 
 @dataclass(frozen=True)
 class CompressionRecord:
     compression_id: str
-    scope: CompressionScope
+    scope: CompressionScope | str
     covered_turn_ids: list[str] = field(default_factory=list)
     summary: str = ""
     source_prompt_chars: int = 0
@@ -19,11 +22,14 @@ class CompressionRecord:
     model: str = ""
     reason: str = ""
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "scope", CompressionScope(self.scope))
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CompressionRecord":
         return cls(
             compression_id=data["compression_id"],
-            scope=data["scope"],
+            scope=CompressionScope(data["scope"]),
             covered_turn_ids=data["covered_turn_ids"],
             summary=data["summary"],
             source_prompt_chars=data["source_prompt_chars"],
@@ -36,7 +42,7 @@ class CompressionRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "compression_id": self.compression_id,
-            "scope": self.scope,
+            "scope": self.scope.value,
             "covered_turn_ids": list(self.covered_turn_ids),
             "summary": self.summary,
             "source_prompt_chars": self.source_prompt_chars,

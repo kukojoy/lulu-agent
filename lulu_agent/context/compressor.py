@@ -7,7 +7,7 @@ from uuid import uuid4
 from lulu_agent.context.budget import ContextPlan, group_messages_by_turn
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.llm.usage import extract_usage
-from lulu_agent.runtime.compression import CompressionRecord
+from lulu_agent.runtime.compression import CompressionRecord, CompressionScope
 from lulu_agent.storage.session_store import SessionStore
 
 TURN_LEVEL_COMPRESSION_SYSTEM_PROMPT = """You compress old agent conversation turns for future context reconstruction.
@@ -100,7 +100,7 @@ def _compress_old_turns(
     usage = extract_usage(response)
     compression = CompressionRecord(
         compression_id=f"cmp-{uuid4().hex[:8]}",
-        scope="turn_range",
+        scope=CompressionScope.TURN_RANGE,
         covered_turn_ids=list(plan.compress_turn_ids),
         summary=summary,
         source_prompt_chars=len(source_text),
@@ -142,7 +142,7 @@ def _compress_full_history(
     usage = extract_usage(response)
     compression = CompressionRecord(
         compression_id=f"cmp-{uuid4().hex[:8]}",
-        scope="full_history",
+        scope=CompressionScope.FULL_HISTORY,
         covered_turn_ids=list(plan.full_history_turn_ids),
         summary=summary,
         source_prompt_chars=len(source_text),

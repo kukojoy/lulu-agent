@@ -16,7 +16,7 @@ from lulu_agent.runtime.errors import (
 )
 from lulu_agent.safety import SAFETY_DENY, SAFETY_NEEDS_APPROVAL
 from lulu_agent.safety.approval import request_approval
-from lulu_agent.safety.tools import check_tool_call_safety
+from lulu_agent.safety.tool_policy import check_tool_call_safety
 from lulu_agent.tools.registry import ToolRegistry
 from lulu_agent.tools.tool import Tool, ToolResult
 from lulu_agent.tools.utils import truncate_middle_text
