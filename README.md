@@ -79,12 +79,24 @@ TAVILY_API_KEY=
 ./lulu.sh
 ```
 
+Windows 可以使用：
+
+```bat
+lulu.bat
+```
+
+也可以直接运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\lulu.ps1
+```
+
 默认地址：
 
 - 后端：`http://127.0.0.1:8000`
 - GUI：`http://127.0.0.1:5173`
 
-`lulu.sh` 会同时启动后端和 GUI，并在可用环境中自动打开浏览器。按 `Ctrl+C` 会停止两个进程。
+`lulu.sh` / `lulu.ps1` 会同时启动后端和 GUI，并在可用环境中自动打开浏览器。按 `Ctrl+C` 会停止两个进程。
 
 可选环境变量：
 
