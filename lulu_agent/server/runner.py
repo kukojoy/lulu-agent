@@ -111,10 +111,19 @@ class ServerRunner:
     def get_runtime_state(self, session_id: str) -> dict[str, Any]:
         self.session_service.resume_session(session_id)
         lock = self._lock_for_session(session_id)
+        with self._lock:
+            agent = self._agents.get(session_id)
+        notices = []
+        if agent is not None:
+            notices = [
+                f"MCP warning [{issue.source}]: {issue.issue_message}"
+                for issue in agent.tool_registry.get_issues()
+            ]
         return {
             "session_id": session_id,
             "running": lock.locked(),
             "connected": self.event_hub.subscriber_count(session_id) > 0,
+            "notices": notices,
         }
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
@@ -161,6 +170,10 @@ class ServerRunner:
     def read_skill(self, name: str) -> dict[str, Any]:
         result = self.skill_store.read_skill(name)
         return result.to_dict(("name", "description", "path", "directory", "content"))
+
+    def list_mcp_tools(self, session_id: str) -> dict[str, Any]:
+        agent = self._agent_for_session(session_id)
+        return agent.tool_registry.list_mcp_tools()
 
     def run_message(self, session_id: str, content: str) -> dict[str, Any]:
         if not isinstance(content, str) or not content.strip():

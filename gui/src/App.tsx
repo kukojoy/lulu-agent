@@ -4,6 +4,8 @@ import {
   Bot,
   BookOpen,
   Brain,
+  ChevronDown,
+  ChevronRight,
   ListTree,
   MessageSquarePlus,
   PanelLeftClose,
@@ -13,6 +15,7 @@ import {
   RefreshCcw,
   Send,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
@@ -23,6 +26,7 @@ import {
   getMemory,
   getRuntimeState,
   getTaskState,
+  listMcpTools,
   inspectSession,
   listSkills,
   listSessions,
@@ -34,6 +38,7 @@ import type {
   ApprovalRequestView,
   ChatItem,
   MemoryView,
+  McpToolsView,
   RuntimeState,
   SkillDocument,
   SkillListView,
@@ -44,7 +49,7 @@ import type {
   TranscriptMessage,
 } from "./types";
 
-type InspectorView = "task" | "memory" | "skills";
+type InspectorView = "task" | "memory" | "skills" | "mcp";
 
 function shortSessionId(sessionId: string): string {
   return sessionId.replace(/^session-/, "");
@@ -115,6 +120,9 @@ function runtimeStateFromPayload(value: unknown): RuntimeState | null {
     session_id: candidate.session_id,
     running: Boolean(candidate.running),
     connected: Boolean(candidate.connected),
+    notices: Array.isArray(candidate.notices)
+      ? candidate.notices.filter((notice): notice is string => typeof notice === "string")
+      : [],
   };
 }
 
@@ -413,6 +421,7 @@ export function App() {
   const [taskState, setTaskState] = useState<TaskState | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
   const [memoryView, setMemoryView] = useState<MemoryView | null>(null);
+  const [mcpTools, setMcpTools] = useState<McpToolsView | null>(null);
   const [skillList, setSkillList] = useState<SkillListView | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<SkillDocument | null>(null);
   const [liveToolItems, setLiveToolItems] = useState<ChatItem[]>([]);
@@ -427,6 +436,7 @@ export function App() {
   const [streamingMessage, setStreamingMessage] = useState("");
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestView | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+  const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const pendingFirstMessageRef = useRef<{ sessionId: string; content: string } | null>(null);
@@ -476,6 +486,7 @@ export function App() {
       setTaskState(null);
       setRuntimeState(null);
       setLiveToolItems([]);
+      setMcpTools(null);
       return;
     }
     if (pendingFirstMessageRef.current?.sessionId === activeSessionId) {
@@ -493,9 +504,29 @@ export function App() {
     setSkillList(nextSkillList);
   }, []);
 
+  const refreshMcpTools = useCallback(async () => {
+    if (!activeSessionId) {
+      setMcpTools(null);
+      return;
+    }
+    setMcpTools(await listMcpTools(activeSessionId));
+  }, [activeSessionId]);
+
   const loadSkill = useCallback(async (name: string) => {
     setSelectedSkill(await readSkill(name));
   }, []);
+
+  function toggleMcpServer(name: string) {
+    setExpandedMcpServers((current) => {
+      const next = new Set(current);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  }
 
   const clearLiveTurnState = useCallback(() => {
     setStreamingMessage("");
@@ -518,7 +549,12 @@ export function App() {
         return;
       }
       runningSessionIdRef.current = sessionId;
-      setRuntimeState({ session_id: sessionId, running: true, connected: true });
+      setRuntimeState((current) => ({
+        session_id: sessionId,
+        running: true,
+        connected: true,
+        notices: current?.session_id === sessionId ? current.notices : [],
+      }));
       socketRef.current.send(JSON.stringify({ type: "user_message", content }));
     },
     [clearLiveTurnState],
@@ -542,7 +578,10 @@ export function App() {
     if (inspectorView === "skills") {
       refreshSkills().catch((nextError) => setError(String(nextError)));
     }
-  }, [inspectorView, refreshMemory, refreshSkills, taskOpen]);
+    if (inspectorView === "mcp") {
+      refreshMcpTools().catch((nextError) => setError(String(nextError)));
+    }
+  }, [inspectorView, refreshMemory, refreshSkills, refreshMcpTools, taskOpen]);
 
   useEffect(() => {
     socketRef.current?.close();
@@ -604,7 +643,12 @@ export function App() {
       }
       if (event.type === "assistant_delta") {
         if (activeSessionId) {
-          setRuntimeState({ session_id: activeSessionId, running: true, connected: true });
+          setRuntimeState((current) => ({
+            session_id: activeSessionId,
+            running: true,
+            connected: true,
+            notices: current?.session_id === activeSessionId ? current.notices : [],
+          }));
         }
         appendStreamingDelta(String(event.payload.delta ?? ""));
         return;
@@ -725,6 +769,8 @@ export function App() {
         ? runtimeState.running
         : busy && runningSessionIdRef.current === activeSessionId),
   );
+  const runtimeNotices =
+    runtimeState?.session_id === activeSessionId ? runtimeState.notices ?? [] : [];
   const composerDisabled = currentSessionRunning || Boolean(activeSessionId && !eventStreamReady);
 
   useEffect(() => {
@@ -738,6 +784,7 @@ export function App() {
     setMessages([]);
     setTaskState(null);
     setRuntimeState(null);
+    setMcpTools(null);
     clearLiveTurnState();
     pendingFirstMessageRef.current = null;
     runningSessionIdRef.current = "";
@@ -780,7 +827,7 @@ export function App() {
       if (!activeSessionId) {
         const session = await createSession();
         runningSessionIdRef.current = session.session_id;
-        setRuntimeState({ session_id: session.session_id, running: true, connected: false });
+        setRuntimeState({ session_id: session.session_id, running: true, connected: false, notices: [] });
         pendingFirstMessageRef.current = {
           sessionId: session.session_id,
           content,
@@ -909,9 +956,21 @@ export function App() {
             <h2>{activeSession?.title || "New session"}</h2>
             <p>{activeSessionId || "Session will be created on first message"}</p>
           </div>
-          <div className="status-pill">
-            <Activity size={15} />
-            {currentSessionRunning ? "Running" : activeSessionId ? eventStreamReady ? "Ready" : "Connecting" : "Draft"}
+          <div className="runtime-status">
+            {runtimeNotices.length > 0 && (
+              <span className="notice-indicator" aria-label={runtimeNotices.join("\n")}>
+                !
+                <span className="notice-tooltip" role="tooltip">
+                  {runtimeNotices.map((notice, index) => (
+                    <span key={`notice-${index}`}>{notice}</span>
+                  ))}
+                </span>
+              </span>
+            )}
+            <div className="status-pill">
+              <Activity size={15} />
+              {currentSessionRunning ? "Running" : activeSessionId ? eventStreamReady ? "Ready" : "Connecting" : "Draft"}
+            </div>
           </div>
         </header>
 
@@ -943,7 +1002,9 @@ export function App() {
         <div className="chat-list">
           {visibleChatItems.map((item) => (
             <article className={`chat-message ${item.kind}`} key={item.id}>
-              <div className="message-role">{item.kind === "runtime_error" ? "runtime" : item.kind.replace("_", " ")}</div>
+              <div className="message-role">
+                {item.kind === "runtime_error" ? "runtime" : item.kind.replace("_", " ")}
+              </div>
               {item.kind === "tool_call" || item.kind === "tool_result" ? (
                 (() => {
                   const reasoning = item.kind === "tool_call" ? item.assistantContent.trim() : "";
@@ -1034,7 +1095,7 @@ export function App() {
             />
             <section className="panel-section">
             <div className="section-title">
-              <div className="inspector-tabs">
+            <div className="inspector-tabs">
                 <button
                   className={`inspector-tab ${inspectorView === "task" ? "active" : ""}`}
                   type="button"
@@ -1061,6 +1122,15 @@ export function App() {
                 >
                   <BookOpen size={16} />
                   <span>Skills</span>
+                </button>
+                <button
+                  className={`inspector-tab ${inspectorView === "mcp" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setInspectorView("mcp")}
+                  title="MCP"
+                >
+                  <Wrench size={16} />
+                  <span>MCP</span>
                 </button>
               </div>
               <button
@@ -1105,7 +1175,7 @@ export function App() {
                   <p className="muted">No memory loaded.</p>
                 )}
               </div>
-            ) : (
+            ) : inspectorView === "skills" ? (
               <div className="knowledge-block">
                 <div className="knowledge-header">
                   <strong>Skills</strong>
@@ -1150,7 +1220,57 @@ export function App() {
                   <p className="muted">No skills loaded.</p>
                 )}
               </div>
-            )}
+            ) : inspectorView === "mcp" ? (
+              <div className="knowledge-block">
+                <div className="knowledge-header">
+                  <strong>MCP</strong>
+                  <button className="text-button" type="button" onClick={() => void refreshMcpTools()}>
+                    Refresh
+                  </button>
+                </div>
+                {mcpTools ? (
+                  mcpTools.servers.length > 0 ? (
+                    <div className="mcp-browser">
+                      {mcpTools.servers.map((server) => (
+                        <section className="mcp-server-group" key={server.name}>
+                          <button
+                            className="mcp-server-toggle"
+                            type="button"
+                            onClick={() => toggleMcpServer(server.name)}
+                            aria-expanded={expandedMcpServers.has(server.name)}
+                          >
+                            {expandedMcpServers.has(server.name) ? (
+                              <ChevronDown size={15} />
+                            ) : (
+                              <ChevronRight size={15} />
+                            )}
+                            <strong>{server.name}</strong>
+                            {server.safety_profile && <span className="status-chip">{server.safety_profile}</span>}
+                            <small>{server.tools.length}</small>
+                          </button>
+                          {expandedMcpServers.has(server.name) && (
+                            <div className="mcp-tool-list">
+                              {server.tools.map((tool) => (
+                                <article className="mcp-tool-item" key={tool.name}>
+                                  <div className="mcp-tool-head">
+                                    <strong>{tool.name}</strong>
+                                  </div>
+                                  <p>{tool.description || "[no description]"}</p>
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted">No MCP tools loaded.</p>
+                  )
+                ) : (
+                  <p className="muted">No MCP tools loaded.</p>
+                )}
+              </div>
+            ) : null}
             </section>
           </>
         ) : (

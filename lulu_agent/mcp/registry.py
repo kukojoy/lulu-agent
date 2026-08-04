@@ -11,23 +11,23 @@ from pathlib import Path
 
 from lulu_agent.mcp.config import DEFAULT_MCP_CONFIG_PATH, load_mcp_config
 from lulu_agent.mcp.client import MCPClient
-from lulu_agent.mcp.adapter import MCPToolAdapterError, build_mcp_tools
+from lulu_agent.mcp.adapter import MCPToolAdapterIssue, build_mcp_tools
 
 from lulu_agent.tools import ToolRegistry
 
 
 @dataclass(frozen=True)
-class MCPRegistryError:
-    """MCP 注册错误信息"""
+class MCPRegistryIssue:
+    """MCP 注册问题信息"""
     server: str
-    error: str
+    issue_message: str
 
 
 @dataclass(frozen=True)
 class MCPRegistryResult:
     """MCP 注册结果"""
     registered: list[str]
-    errors: list[MCPRegistryError]
+    issues: list[MCPRegistryIssue]
 
 
 def _extract_tool_infos(output) -> list[dict]:
@@ -37,12 +37,12 @@ def _extract_tool_infos(output) -> list[dict]:
     return []
 
 
-def _adapter_error_to_registry_error(
+def _adapter_issue_to_registry_issue(
     server_name: str,
-    error: MCPToolAdapterError,
-) -> MCPRegistryError:
-    name = f"{error.name}: " if error.name else ""
-    return MCPRegistryError(server=server_name, error=f"{name}{error.error}")
+    issue: MCPToolAdapterIssue,
+) -> MCPRegistryIssue:
+    name = f"{issue.name}: " if issue.name else ""
+    return MCPRegistryIssue(server=server_name, issue_message=f"{name}{issue.issue_message}")
 
 
 # === 唯一对外接口 ===
@@ -53,23 +53,23 @@ def register_mcp_tools(
     """注册 MCP 工具到工具注册表
     
     Returns:
-        MCPRegistryResult: 注册结果，包括注册成功的工具名称列表和错误信息列表
+        MCPRegistryResult: 注册结果，包括注册成功的工具名称列表和问题信息列表
     """
     config_result = load_mcp_config(config_path)
     registered: list[str] = []
-    errors = [ # 将 MCPConfigLoadError 转换为 MCPRegistryError
-        MCPRegistryError(server="", error=f"{error.path}: {error.error}")
-        for error in config_result.errors
+    issues = [ # 将 MCPConfigIssue 转换为 MCPRegistryIssue
+        MCPRegistryIssue(server="", issue_message=f"{issue.path}: {issue.issue_message}")
+        for issue in config_result.issues
     ]
 
     for server_config in config_result.servers:
         client = MCPClient(server_config)
         discovery = client.list_tools()
         if not discovery.ok:
-            errors.append(
-                MCPRegistryError(
+            issues.append(
+                MCPRegistryIssue(
                     server=server_config.name,
-                    error=discovery.error or "MCP tool discovery failed.",
+                    issue_message=discovery.error or "MCP tool discovery failed.",
                 )
             )
             continue
@@ -82,15 +82,18 @@ def register_mcp_tools(
             existing_names=set(registry.names()),
         )
 
-        for error in adapter_result.errors:
-            errors.append(_adapter_error_to_registry_error(server_config.name, error))
+        for issue in adapter_result.issues:
+            issues.append(_adapter_issue_to_registry_issue(server_config.name, issue))
 
         for tool in adapter_result.tools:
             try:
-                registry.register(tool)
+                registry.register(
+                    tool,
+                    safety_profile=server_config.safety_profile,
+                )
             except ValueError as exc:
-                errors.append(MCPRegistryError(server=server_config.name, error=str(exc)))
+                issues.append(MCPRegistryIssue(server=server_config.name, issue_message=str(exc)))
                 continue
             registered.append(tool.name)
 
-    return MCPRegistryResult(registered=registered, errors=errors)
+    return MCPRegistryResult(registered=registered, issues=issues)

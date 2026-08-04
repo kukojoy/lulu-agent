@@ -127,6 +127,10 @@ def main(argv: list[str] | None = None):
 
     print(f"lulu-agent started. model={agent.llm_client.model}")
     print(f"Session id: {session_id}")
+    registry = getattr(agent, "tool_registry", None)
+    if registry is not None:
+        for issue in registry.get_issues():
+            print(f"[MCP warning] {issue.source}: {issue.issue_message}")
     print("Type /exit or /quit to exit.")
 
     while True:

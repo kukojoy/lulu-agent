@@ -53,6 +53,7 @@ export type RuntimeState = {
   session_id: string;
   running: boolean;
   connected: boolean;
+  notices?: string[];
 };
 
 export type MemoryEntry = {
@@ -97,6 +98,21 @@ export type SkillDocument = {
   path: string;
   directory: string;
   content: string;
+};
+
+export type McpToolView = {
+  name: string;
+  description: string;
+};
+
+export type McpServerToolsView = {
+  name: string;
+  safety_profile?: string;
+  tools: McpToolView[];
+};
+
+export type McpToolsView = {
+  servers: McpServerToolsView[];
 };
 
 export type TraceTimelineItem = {

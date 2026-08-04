@@ -4,9 +4,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from lulu_agent.safety import SAFETY_PROFILE_APPROVAL_REQUIRED, SAFETY_PROFILE_TRUSTED
+
 
 DEFAULT_MCP_CONFIG_PATH = Path.home() / ".lulu" / "mcp.json"
 DEFAULT_MCP_SERVER_TIMEOUT = 30.0
+DEFAULT_MCP_SERVER_SAFETY_PROFILE = SAFETY_PROFILE_TRUSTED
+MCP_SERVER_SAFETY_PROFILES = frozenset(
+    {
+        SAFETY_PROFILE_APPROVAL_REQUIRED,
+        SAFETY_PROFILE_TRUSTED,
+    }
+)
 MCP_SERVER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 
 
@@ -20,24 +29,26 @@ class MCPServerConfig:
         args (list[str]): 请求 MCP 服务器的命令行参数列表
         env (dict[str, str]): 请求 MCP 服务器的环境变量字典
         timeout (float): 请求 MCP 服务器的超时时间, 单位为秒
+        safety_profile (str): MCP 工具调用安全档位
     """
     name: str
     command: str
     args: list[str]
     env: dict[str, str]
     timeout: float
+    safety_profile: str = DEFAULT_MCP_SERVER_SAFETY_PROFILE
 
 
 @dataclass(frozen=True)
-class MCPConfigLoadError:
-    """单个 MCP 配置项加载错误
+class MCPConfigIssue:
+    """单个 MCP 配置项加载问题
 
     Attributes:
         path (str): MCP 配置文件路径
-        error (str): 错误信息
+        issue_message (str): 问题信息
     """
     path: str
-    error: str
+    issue_message: str
 
 
 @dataclass(frozen=True)
@@ -47,11 +58,11 @@ class MCPConfigResult:
     Attributes:
         path (str): MCP 配置文件路径
         servers (list[MCPServerConfig]): MCP 服务器配置列表
-        errors (list[MCPConfigLoadError]): 加载错误列表
+        issues (list[MCPConfigIssue]): 加载问题列表
     """
     path: str
     servers: list[MCPServerConfig]
-    errors: list[MCPConfigLoadError]
+    issues: list[MCPConfigIssue]
 
 
 def _parse_server_config(name: str, raw_server: Any) -> MCPServerConfig | None:
@@ -95,6 +106,10 @@ def _parse_server_config(name: str, raw_server: Any) -> MCPServerConfig | None:
     if not _is_positive_number(timeout):
         raise ValueError("timeout must be a positive number.")
 
+    safety_profile = raw_server.get("safety_profile", DEFAULT_MCP_SERVER_SAFETY_PROFILE)
+    if safety_profile not in MCP_SERVER_SAFETY_PROFILES:
+        raise ValueError("safety_profile must be trusted or approval_required.")
+
     # 封装为 MCPServerConfig 对象
     return MCPServerConfig(
         name=name,
@@ -102,6 +117,7 @@ def _parse_server_config(name: str, raw_server: Any) -> MCPServerConfig | None:
         args=list(args),
         env=dict(env),
         timeout=float(timeout),
+        safety_profile=str(safety_profile),
     )
 
 
@@ -141,7 +157,7 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
         return MCPConfigResult(
             path=resolved_path,
             servers=[],
-            errors=[],
+            issues=[],
         )
 
     try:
@@ -150,10 +166,10 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
         return MCPConfigResult(
             path=resolved_path,
             servers=[],
-            errors=[
-                MCPConfigLoadError(
+            issues=[
+                MCPConfigIssue(
                     path=resolved_path,
-                    error=f"Invalid MCP config JSON: {exc.msg}",
+                    issue_message=f"Invalid MCP config JSON: {exc.msg}",
                 )
             ],
         )
@@ -162,10 +178,10 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
         return MCPConfigResult(
             path=resolved_path,
             servers=[],
-            errors=[
-                MCPConfigLoadError(
+            issues=[
+                MCPConfigIssue(
                     path=resolved_path,
-                    error="MCP config must be a JSON object.",
+                    issue_message="MCP config must be a JSON object.",
                 )
             ],
         )
@@ -177,23 +193,23 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
         return MCPConfigResult(
             path=resolved_path,
             servers=[],
-            errors=[
-                MCPConfigLoadError(
+            issues=[
+                MCPConfigIssue(
                     path=resolved_path,
-                    error="mcpServers must be a JSON object.",
+                    issue_message="mcpServers must be a JSON object.",
                 )
             ],
         )
 
     servers: list[MCPServerConfig] = []
-    errors: list[MCPConfigLoadError] = []
+    issues: list[MCPConfigIssue] = []
     # 按名称排序解析 MCP 服务器配置
     for name, raw_server in sorted(raw_servers.items(), key=lambda item: item[0]):
         server_path = f"{resolved_path}:mcpServers.{name}"
         try:
             server = _parse_server_config(name, raw_server)
         except ValueError as exc:
-            errors.append(MCPConfigLoadError(path=server_path, error=str(exc)))
+            issues.append(MCPConfigIssue(path=server_path, issue_message=str(exc)))
             continue
 
         if server is not None:
@@ -202,5 +218,5 @@ def load_mcp_config(path: str | Path = DEFAULT_MCP_CONFIG_PATH) -> MCPConfigResu
     return MCPConfigResult(
         path=resolved_path,
         servers=servers,
-        errors=errors,
+        issues=issues,
     )

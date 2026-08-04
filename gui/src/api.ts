@@ -1,5 +1,6 @@
 import type {
   MemoryView,
+  McpToolsView,
   RuntimeEvent,
   RuntimeState,
   SkillDocument,
@@ -76,6 +77,10 @@ export async function getRuntimeState(sessionId: string): Promise<RuntimeState> 
     `/sessions/${sessionId}/runtime`,
   );
   return data.runtime;
+}
+
+export function listMcpTools(sessionId: string): Promise<McpToolsView> {
+  return requestJson<McpToolsView>(`/sessions/${sessionId}/mcp-tools`);
 }
 
 export async function getMemory(): Promise<MemoryView> {

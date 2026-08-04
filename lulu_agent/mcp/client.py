@@ -13,10 +13,12 @@ SDK 相关补充解释:
 """
 
 import asyncio
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from lulu_agent.mcp.config import MCPServerConfig
+from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL, ERROR_TIMEOUT, ErrorType
 
 
 try:
@@ -54,11 +56,13 @@ class MCPClientResult:
         server (str): MCP 服务器名称
         output (Any): 成功时的输出结果
         error (str | None): 失败时的错误信息
+        error_type (ErrorType | None): 失败类型
     """
     ok: bool
     server: str
     output: Any = None
     error: str | None = None
+    error_type: ErrorType | None = None
 
 
 class MCPClient:
@@ -95,7 +99,7 @@ class MCPClient:
                 )
             )
         except TimeoutError:
-            return self._error("MCP list_tools timed out.")
+            return self._error("MCP list_tools timed out.", ERROR_TIMEOUT)
         except Exception as exc:
             return self._error(f"MCP list_tools failed: {_safe_error(exc)}")
 
@@ -123,7 +127,7 @@ class MCPClient:
                 )
             )
         except TimeoutError:
-            return self._error(f"MCP tool call timed out: {tool_name}")
+            return self._error(f"MCP tool call timed out: {tool_name}", ERROR_TIMEOUT)
         except Exception as exc:
             return self._error(f"MCP tool call failed: {_safe_error(exc)}")
 
@@ -166,11 +170,12 @@ class MCPClient:
             client_session_cls=self.client_session_cls,
         )
 
-    def _error(self, message: str) -> MCPClientResult:
+    def _error(self, message: str, error_type: ErrorType = ERROR_EXTERNAL_TOOL) -> MCPClientResult:
         return MCPClientResult(
             ok=False,
             server=self.config.name,
             error=message,
+            error_type=error_type,
         )
 
 
@@ -184,12 +189,16 @@ class _MCPSessionContext:
         self.session = None
 
     async def __aenter__(self):
-        self.stdio_context = self.stdio_client_fn(self.params)
-        read_stream, write_stream = await self.stdio_context.__aenter__()
-        self.session_context = self.client_session_cls(read_stream, write_stream)
-        self.session = await self.session_context.__aenter__()
-        await self.session.initialize()
-        return self.session
+        try:
+            self.stdio_context = self.stdio_client_fn(self.params)
+            read_stream, write_stream = await self.stdio_context.__aenter__()
+            self.session_context = self.client_session_cls(read_stream, write_stream)
+            self.session = await self.session_context.__aenter__()
+            await self.session.initialize()
+            return self.session
+        except BaseException:
+            await self.__aexit__(*sys.exc_info())
+            raise
 
     async def __aexit__(self, exc_type, exc, traceback):
         if self.session_context is not None:

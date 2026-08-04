@@ -3,6 +3,7 @@
 负责把 MCP 工具信息转换成 lulu-agent Tool
 """
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -17,26 +18,26 @@ MCP_TOOL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_]")
 
 
 @dataclass(frozen=True)
-class MCPToolAdapterError:
-    """MCP 工具适配器错误"""
+class MCPToolAdapterIssue:
+    """MCP 工具适配器问题"""
     name: str
-    error: str
+    issue_message: str
 
 
 @dataclass(frozen=True)
 class MCPToolAdapterResult:
     """MCP 工具适配器结果"""
     tools: list[Tool]
-    errors: list[MCPToolAdapterError]
+    issues: list[MCPToolAdapterIssue]
 
 
-def _build_mcp_tool_name(server_name: str, tool_name: str) -> str:
+def build_mcp_tool_name(server_name: str, tool_name: str) -> str:
     parts = [
         MCP_TOOL_NAME_PREFIX,
         _sanitize_name_part(server_name),
         _sanitize_name_part(tool_name),
     ]
-    return "_".join(part for part in parts if part)
+    return ":".join(part for part in parts if part)
 
 
 def _normalize_mcp_input_schema(schema: Any) -> dict[str, Any]:
@@ -92,7 +93,7 @@ def _make_handler(client: MCPClient, raw_tool_name: str) -> Callable[[dict[str, 
             return ToolResult(
                 ok=False,
                 error=result.error,
-                error_type=ERROR_EXTERNAL_TOOL,
+                error_type=result.error_type or ERROR_EXTERNAL_TOOL,
             )
         if _is_mcp_error_result(result.output):
             return ToolResult(
@@ -120,8 +121,24 @@ def _extract_mcp_error_text(output: dict[str, Any]) -> str:
         ]
         text = "\n".join(item for item in texts if item.strip()).strip()
         if text:
-            return text
+            return _extract_error_message_from_text(text)
     return "MCP tool returned an error result."
+
+
+def _extract_error_message_from_text(text: str) -> str:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    if not isinstance(data, dict):
+        return text
+
+    for key in ("errorMessage", "message", "error"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return text
 
 
 # === 唯一对外接口 ===
@@ -141,25 +158,25 @@ def build_mcp_tools(
     """
     existing = existing_names or set()
     tools: list[Tool] = []
-    errors: list[MCPToolAdapterError] = []
+    issues: list[MCPToolAdapterIssue] = []
 
     for info in tool_infos:
         raw_name = info.get("name", "")
         if not isinstance(raw_name, str) or not raw_name.strip():
-            errors.append(
-                MCPToolAdapterError(
+            issues.append(
+                MCPToolAdapterIssue(
                     name="",
-                    error="MCP tool name must be a non-empty string.",
+                    issue_message="MCP tool name must be a non-empty string.",
                 )
             )
             continue
 
-        name = _build_mcp_tool_name(server_name, raw_name)
+        name = build_mcp_tool_name(server_name, raw_name)
         if name in existing:
-            errors.append(
-                MCPToolAdapterError(
+            issues.append(
+                MCPToolAdapterIssue(
                     name=name,
-                    error=f"MCP tool name conflicts with existing tool: {name}",
+                    issue_message=f"MCP tool name conflicts with existing tool: {name}",
                 )
             )
             continue
@@ -173,4 +190,4 @@ def build_mcp_tools(
         tools.append(tool)
         existing.add(name)
 
-    return MCPToolAdapterResult(tools=tools, errors=errors)
+    return MCPToolAdapterResult(tools=tools, issues=issues)

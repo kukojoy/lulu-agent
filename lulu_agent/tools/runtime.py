@@ -2,7 +2,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from lulu_agent.config import config
 from lulu_agent.runtime.errors import (
     ERROR_APPROVAL_DENIED,
     ERROR_EXECUTION,
@@ -118,7 +117,7 @@ class ToolRuntime:
         safety_decision = check_tool_call_safety(
             tool_call.tool_name,
             tool_call.arguments,
-            safety_profile=config.safety_profile,
+            safety_profile=self.registry.get_safety_profile(tool_call.tool_name),
         )
         if safety_decision is None:
             return None

@@ -5,7 +5,11 @@ from typing import Any
 from lulu_agent.safety.policy import (
     PATH_OPERATION_READ,
     PATH_OPERATION_WRITE,
+    SAFETY_ALLOW,
     SAFETY_DENY,
+    SAFETY_NEEDS_APPROVAL,
+    SAFETY_PROFILE_APPROVAL_REQUIRED,
+    SAFETY_PROFILE_TRUSTED,
     PathOperation,
     PathSafetyError,
     SafetyDecision,
@@ -28,8 +32,11 @@ def check_tool_call_safety(
     arguments: dict[str, Any],
     safety_profile: str,
 ) -> SafetyDecision | None:
+    if tool_name.startswith("mcp:"):
+        return _check_mcp_tool_call_safety(tool_name, safety_profile)
+
     if tool_name == "run_shell":
-        return _check_shell_command_tool_call_safety(arguments["command"], safety_profile=safety_profile)
+        return _check_shell_command_tool_call_safety(arguments["command"], safety_profile)
 
     path_policy = TOOL_PATH_OPERATIONS.get(tool_name)
     if path_policy is None:
@@ -66,3 +73,26 @@ def _check_path_tool_call_safety(
             category="file_path",
         )
     return decision
+
+
+def _check_mcp_tool_call_safety(
+    tool_name: str,
+    safety_profile: str,
+) -> SafetyDecision:
+    if safety_profile == SAFETY_PROFILE_APPROVAL_REQUIRED:
+        return SafetyDecision(
+            decision=SAFETY_NEEDS_APPROVAL,
+            reason=f"Tool {tool_name} requires approval",
+            category="mcp_tool",
+        )
+    if safety_profile == SAFETY_PROFILE_TRUSTED:
+        return SafetyDecision(
+            decision=SAFETY_ALLOW,
+            reason=f"Tool {tool_name} is trusted",
+            category="mcp_tool",
+        )
+    return SafetyDecision(
+        decision=SAFETY_NEEDS_APPROVAL,
+        reason=f"Tool {tool_name} requires approval",
+        category="mcp_tool",
+    )

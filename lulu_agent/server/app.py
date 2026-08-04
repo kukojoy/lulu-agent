@@ -105,6 +105,13 @@ def create_app(runner: ServerRunner | None = None):
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/sessions/{session_id}/mcp-tools")
+    def list_mcp_tools(session_id: str) -> dict[str, Any]:
+        try:
+            return runner.list_mcp_tools(session_id)
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/memory")
     def get_memory() -> dict[str, Any]:
         return {"memory": runner.get_memory()}
