@@ -12,6 +12,19 @@ function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Stop-ProcessTree($Process) {
+  if (-not $Process -or $Process.HasExited) {
+    return
+  }
+
+  if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    taskkill /PID $Process.Id /T /F | Out-Null
+    return
+  }
+
+  Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+}
+
 if ($env:LULU_PYTHON) {
   $PythonExe = $env:LULU_PYTHON
   $PythonArgs = @()
@@ -82,10 +95,6 @@ try {
     Write-Host "GUI exited with code $($Frontend.ExitCode)."
   }
 } finally {
-  if ($Backend -and -not $Backend.HasExited) {
-    Stop-Process -Id $Backend.Id -Force -ErrorAction SilentlyContinue
-  }
-  if ($Frontend -and -not $Frontend.HasExited) {
-    Stop-Process -Id $Frontend.Id -Force -ErrorAction SilentlyContinue
-  }
+  Stop-ProcessTree $Backend
+  Stop-ProcessTree $Frontend
 }
