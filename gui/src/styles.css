@@ -454,11 +454,25 @@ h2 {
 }
 
 .message-role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 6px;
   color: #617084;
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.error-type-pill {
+  border: 1px solid #efb5b5;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #9c2e2e;
+  background: #fffafa;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: none;
 }
 
 .chat-message p {
@@ -638,6 +652,68 @@ h2 {
   padding: 14px 20px 18px;
   border-top: 1px solid #e0e5ec;
   background: #f8fafc;
+}
+
+.model-config-toggle {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 28px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  padding: 3px 10px 3px 8px;
+  background: #ffffff;
+  color: #344255;
+  font-size: 12px;
+  text-align: left;
+}
+
+.model-config-toggle span,
+.model-config-toggle small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-config-toggle span {
+  font-weight: 800;
+}
+
+.model-config-toggle small {
+  color: #697486;
+}
+
+.model-config-detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-top: -2px;
+}
+
+.model-config-detail span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid #d8e0ea;
+  border-radius: 7px;
+  padding: 4px 8px;
+  background: #ffffff;
+  color: #344255;
+  font-size: 12px;
+}
+
+.model-config-detail strong {
+  color: #697486;
+  font-size: 11px;
+  text-transform: uppercase;
 }
 
 .composer textarea {

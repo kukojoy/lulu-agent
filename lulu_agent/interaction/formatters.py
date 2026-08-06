@@ -47,6 +47,9 @@ def format_session_inspection(summary: dict[str, Any]) -> str:
                 f"tool_calls={turn.get('tool_calls', 0)}"
             )
             if turn.get("error"):
+                error_type = turn.get("error_type")
+                if error_type:
+                    detail = f"{detail} error_type={error_type}"
                 detail = f"{detail} error={turn['error']}"
             lines.append(f"{index}. {turn.get('turn_id')}: {detail}")
     if summary.get("compressions"):

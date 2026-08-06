@@ -31,6 +31,7 @@ export type TurnInspection = {
   status: string;
   exit_reason?: string | null;
   error?: string | null;
+  error_type?: string | null;
   final_response?: string;
 };
 
@@ -54,6 +55,12 @@ export type RuntimeState = {
   running: boolean;
   connected: boolean;
   notices?: string[];
+};
+
+export type ModelConfigView = {
+  model: string;
+  base_url_host: string;
+  timeout_seconds: number;
 };
 
 export type MemoryEntry = {
@@ -154,6 +161,7 @@ export type ChatItem =
       id: string;
       kind: "user" | "assistant" | "runtime_error";
       content: string;
+      errorType?: string | null;
     }
   | {
       id: string;

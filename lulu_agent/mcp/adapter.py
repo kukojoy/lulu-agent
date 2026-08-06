@@ -14,7 +14,7 @@ from lulu_agent.runtime.errors import ERROR_EXTERNAL_TOOL
 
 
 MCP_TOOL_NAME_PREFIX = "mcp"
-MCP_TOOL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_]")
+MCP_TOOL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ def build_mcp_tool_name(server_name: str, tool_name: str) -> str:
         _sanitize_name_part(server_name),
         _sanitize_name_part(tool_name),
     ]
-    return ":".join(part for part in parts if part)
+    return "_".join(part for part in parts if part)
 
 
 def _normalize_mcp_input_schema(schema: Any) -> dict[str, Any]:
@@ -65,8 +65,8 @@ def _normalize_mcp_input_schema(schema: Any) -> dict[str, Any]:
 
 
 def _sanitize_name_part(value: str) -> str:
-    sanitized = MCP_TOOL_NAME_PATTERN.sub("_", value.strip())
-    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    sanitized = MCP_TOOL_NAME_PATTERN.sub("-", value.strip())
+    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
     return sanitized
 
 

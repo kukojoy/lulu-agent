@@ -7,7 +7,7 @@ from lulu_agent.runtime.events import (
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_ASSISTANT_MESSAGE,
-    EVENT_ERROR
+    EVENT_TURN_END,
 )
 from uuid import uuid4
 
@@ -113,12 +113,14 @@ class CliEventSink(EventSink):
                         f"[agent response:] {event.payload.get('content', '')}",
                     )
                 )
-        elif event.type == EVENT_ERROR:
+        elif event.type == EVENT_TURN_END and event.payload.get("error"):
             self._finish_streaming()
+            error_type = event.payload.get("error_type")
+            error_label = f" ({error_type})" if error_type else ""
             print(
                 self._color(
                     self.COLOR_RED,
-                    f"[error] {event.payload.get('message', '')}",
+                    f"[error]{error_label} {event.payload.get('error', '')}",
                 )
             )
 

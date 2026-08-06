@@ -32,7 +32,7 @@ def check_tool_call_safety(
     arguments: dict[str, Any],
     safety_profile: str,
 ) -> SafetyDecision | None:
-    if tool_name.startswith("mcp:"):
+    if tool_name.startswith("mcp_"):
         return _check_mcp_tool_call_safety(tool_name, safety_profile)
 
     if tool_name == "run_shell":

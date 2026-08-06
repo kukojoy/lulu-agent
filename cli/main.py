@@ -87,9 +87,6 @@ def main(argv: list[str] | None = None):
     args = parse_args(argv)
     store = SessionStore()
     session_service = SessionInteractionService(store)
-    llm_client = LLMClient(config)
-    memory_reviewer = MemoryReviewer(llm_client=llm_client)
-    skill_reviewer = SkillReviewer(llm_client=llm_client)
 
     if args.list_sessions:
         print(format_sessions(session_service.list_sessions(limit=20)))
@@ -111,6 +108,9 @@ def main(argv: list[str] | None = None):
         return
 
     try:
+        llm_client = LLMClient(config)
+        memory_reviewer = MemoryReviewer(llm_client=llm_client)
+        skill_reviewer = SkillReviewer(llm_client=llm_client)
         agent, session_id = create_agent(
             args,
             session_store=store,

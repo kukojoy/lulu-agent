@@ -126,6 +126,9 @@ class ServerRunner:
             "notices": notices,
         }
 
+    def get_model_config(self) -> dict[str, Any]:
+        return asdict(LLMClient(config).get_model_config())
+
     def delete_session(self, session_id: str) -> dict[str, Any]:
         metadata = self.session_service.delete_session(session_id)
         with self._lock:

@@ -24,6 +24,7 @@ import {
   createSession,
   deleteSession,
   getMemory,
+  getModelConfig,
   getRuntimeState,
   getTaskState,
   listMcpTools,
@@ -39,6 +40,7 @@ import type {
   ChatItem,
   MemoryView,
   McpToolsView,
+  ModelConfigView,
   RuntimeState,
   SkillDocument,
   SkillListView,
@@ -343,10 +345,16 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 function transcriptToChatItems(messages: TranscriptMessage[], inspection: SessionInspection | null): ChatItem[] {
-  const approvalDeniedTurns = new Map(
+  const errorTurns = new Map(
     (inspection?.turns ?? [])
-      .filter((turn) => turn.exit_reason === "approval_denied")
-      .map((turn) => [turn.turn_id, turn.final_response || turn.error || "Operation cancelled."]),
+      .filter((turn) => turn.error)
+      .map((turn) => [
+        turn.turn_id,
+        {
+          content: turn.final_response || turn.error || "Agent runtime error",
+          errorType: turn.error_type,
+        },
+      ]),
   );
   const lastMessageIndexByTurn = new Map<string, number>();
   messages.forEach((message, index) => {
@@ -398,14 +406,15 @@ function transcriptToChatItems(messages: TranscriptMessage[], inspection: Sessio
         };
       }
 
-      const runtimeError = message.turn_id ? approvalDeniedTurns.get(message.turn_id) : "";
+      const runtimeError = message.turn_id ? errorTurns.get(message.turn_id) : null;
       if (runtimeError && lastMessageIndexByTurn.get(message.turn_id ?? "") === index) {
         return [
           item,
           {
-            id: `${message.turn_id}-approval-denied`,
+            id: `${message.turn_id}-runtime-error`,
             kind: "runtime_error",
-            content: runtimeError,
+            content: runtimeError.content,
+            errorType: runtimeError.errorType,
           },
         ];
       }
@@ -420,6 +429,7 @@ export function App() {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [taskState, setTaskState] = useState<TaskState | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
+  const [modelConfig, setModelConfig] = useState<ModelConfigView | null>(null);
   const [memoryView, setMemoryView] = useState<MemoryView | null>(null);
   const [mcpTools, setMcpTools] = useState<McpToolsView | null>(null);
   const [skillList, setSkillList] = useState<SkillListView | null>(null);
@@ -437,6 +447,7 @@ export function App() {
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestView | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(new Set());
+  const [modelConfigOpen, setModelConfigOpen] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const pendingFirstMessageRef = useRef<{ sessionId: string; content: string } | null>(null);
@@ -565,6 +576,12 @@ export function App() {
   }, [refreshSessions]);
 
   useEffect(() => {
+    getModelConfig()
+      .then(setModelConfig)
+      .catch((nextError) => setError(String(nextError)));
+  }, []);
+
+  useEffect(() => {
     refreshActiveSession().catch((nextError) => setError(String(nextError)));
   }, [refreshActiveSession]);
 
@@ -630,17 +647,6 @@ export function App() {
         setBusy(false);
         return;
       }
-      if (event.type === "error") {
-        setLiveToolItems((current) => [
-          ...current,
-          {
-            id: `live-${event.turn_id}-error-${current.length}`,
-            kind: "runtime_error",
-            content: String(event.payload.message ?? "Agent runtime error"),
-          },
-        ]);
-        return;
-      }
       if (event.type === "assistant_delta") {
         if (activeSessionId) {
           setRuntimeState((current) => ({
@@ -685,6 +691,21 @@ export function App() {
         return;
       }
       if (event.type === "turn_end") {
+        const turnError = event.payload.error;
+        if (turnError) {
+          setLiveToolItems((current) => [
+            ...current,
+            {
+              id: `live-${event.turn_id}-error-${current.length}`,
+              kind: "runtime_error",
+              content: String(turnError),
+              errorType:
+                typeof event.payload.error_type === "string"
+                  ? event.payload.error_type
+                  : null,
+            },
+          ]);
+        }
         refreshActiveSession()
           .then(() => {
             clearLiveTurnState();
@@ -1004,6 +1025,9 @@ export function App() {
             <article className={`chat-message ${item.kind}`} key={item.id}>
               <div className="message-role">
                 {item.kind === "runtime_error" ? "runtime" : item.kind.replace("_", " ")}
+                {item.kind === "runtime_error" && item.errorType && (
+                  <span className="error-type-pill">{item.errorType}</span>
+                )}
               </div>
               {item.kind === "tool_call" || item.kind === "tool_result" ? (
                 (() => {
@@ -1064,6 +1088,33 @@ export function App() {
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
+          <button
+            className="model-config-toggle"
+            type="button"
+            onClick={() => setModelConfigOpen((current) => !current)}
+            aria-expanded={modelConfigOpen}
+            title="Model configuration"
+          >
+            {modelConfigOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span>{modelConfig?.model || "Model unavailable"}</span>
+            {modelConfig?.base_url_host && <small>{modelConfig.base_url_host}</small>}
+          </button>
+          {modelConfigOpen && (
+            <div className="model-config-detail">
+              <span>
+                <strong>model</strong>
+                {modelConfig?.model || "unknown"}
+              </span>
+              <span>
+                <strong>host</strong>
+                {modelConfig?.base_url_host || "unknown"}
+              </span>
+              <span>
+                <strong>timeout</strong>
+                {modelConfig ? `${modelConfig.timeout_seconds}s` : "unknown"}
+              </span>
+            </div>
+          )}
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

@@ -1,6 +1,7 @@
 import type {
   MemoryView,
   McpToolsView,
+  ModelConfigView,
   RuntimeEvent,
   RuntimeState,
   SkillDocument,
@@ -77,6 +78,11 @@ export async function getRuntimeState(sessionId: string): Promise<RuntimeState> 
     `/sessions/${sessionId}/runtime`,
   );
   return data.runtime;
+}
+
+export async function getModelConfig(): Promise<ModelConfigView> {
+  const data = await requestJson<{ model_config: ModelConfigView }>("/runtime/model");
+  return data.model_config;
 }
 
 export function listMcpTools(sessionId: string): Promise<McpToolsView> {

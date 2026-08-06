@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from lulu_agent.context.budget import ContextPlan, group_messages_by_turn
 from lulu_agent.llm.client import LLMClient
-from lulu_agent.llm.usage import extract_usage
+from lulu_agent.llm.response import ModelRequest
 from lulu_agent.runtime.compression import CompressionRecord, CompressionScope
 from lulu_agent.storage.session_store import SessionStore
 
@@ -89,15 +89,18 @@ def _compress_old_turns(
     if not source_text:
         return None
 
-    response = llm_client.chat(
-        messages=_build_turn_level_compression_messages(plan.compress_turn_ids, source_text),
-        tools=None,
+    response = llm_client.complete(
+        ModelRequest(
+            messages=_build_turn_level_compression_messages(plan.compress_turn_ids, source_text),
+            tools=None,
+            stream=False,
+        )
     )
-    summary = response.choices[0].message.content
+    summary = response.message.content
     if not summary:
         return None
 
-    usage = extract_usage(response)
+    usage = response.usage
     compression = CompressionRecord(
         compression_id=f"cmp-{uuid4().hex[:8]}",
         scope=CompressionScope.TURN_RANGE,
@@ -131,15 +134,18 @@ def _compress_full_history(
     if not source_text:
         return None
 
-    response = llm_client.chat(
-        messages=_build_chain_level_compression_messages(plan.full_history_turn_ids, source_text),
-        tools=None,
+    response = llm_client.complete(
+        ModelRequest(
+            messages=_build_chain_level_compression_messages(plan.full_history_turn_ids, source_text),
+            tools=None,
+            stream=False,
+        )
     )
-    summary = response.choices[0].message.content
+    summary = response.message.content
     if not summary:
         return None
 
-    usage = extract_usage(response)
+    usage = response.usage
     compression = CompressionRecord(
         compression_id=f"cmp-{uuid4().hex[:8]}",
         scope=CompressionScope.FULL_HISTORY,

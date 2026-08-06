@@ -50,9 +50,9 @@ class ToolRegistry:
     def list_mcp_tools(self) -> dict[str, Any]:
         servers: dict[str, dict[str, Any]] = {}
         for tool_name, tool in self._tools.items():
-            if not tool_name.startswith("mcp:"):
+            if not tool_name.startswith("mcp_"):
                 continue
-            parts = tool_name.split(":", 2)
+            parts = tool_name.split("_", 2)
             if len(parts) != 3 or not parts[1]:
                 continue
 

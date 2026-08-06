@@ -3,7 +3,6 @@ from typing import Any
 from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_DELTA,
     EVENT_ASSISTANT_MESSAGE,
-    EVENT_ERROR,
     EVENT_MODEL_REQUEST,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
@@ -49,6 +48,7 @@ def _timeline_item(record: dict[str, Any]) -> dict[str, Any]:
         item["tool_call_id"] = payload.get("tool_call_id")
     if event_type == EVENT_TOOL_RESULT:
         item["ok"] = payload.get("ok")
+    if event_type in {EVENT_TOOL_RESULT, EVENT_TURN_END}:
         item["error"] = payload.get("error")
         item["error_type"] = payload.get("error_type")
     return item
@@ -63,7 +63,6 @@ def _event_label(event_type: str | None) -> str:
         EVENT_ASSISTANT_MESSAGE: "Assistant message",
         EVENT_TOOL_CALL: "Tool call",
         EVENT_TOOL_RESULT: "Tool result",
-        EVENT_ERROR: "Error",
         EVENT_TURN_END: "Turn ended",
     }
     return labels.get(event_type, str(event_type or "unknown"))
@@ -86,8 +85,8 @@ def _event_detail(event_type: str | None, payload: dict[str, Any]) -> str:
         return f"{payload.get('tool_name')} args={payload.get('arguments', {})}"
     if event_type == EVENT_TOOL_RESULT:
         return f"{payload.get('tool_name')} ok={payload.get('ok')}"
-    if event_type == EVENT_ERROR:
-        return str(payload.get("message") or "")
     if event_type == EVENT_TURN_END:
+        if payload.get("error"):
+            return str(payload.get("error"))
         return f"{payload.get('status')} / {payload.get('exit_reason')}"
     return ""

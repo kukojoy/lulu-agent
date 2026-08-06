@@ -3,16 +3,14 @@ import threading
 
 from datetime import datetime
 
-from lulu_agent.core.assistant_response import StreamingAssistantResponseBuilder
 from lulu_agent.config import config
 from lulu_agent.context.compressor import compress_turns
 from lulu_agent.context.manager import ContextManager
-from lulu_agent.llm.usage import extract_usage
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.llm.response import ModelRequest
 from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_DELTA,
     EVENT_ASSISTANT_MESSAGE,
-    EVENT_ERROR,
     EVENT_MODEL_REQUEST,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
@@ -23,8 +21,8 @@ from lulu_agent.runtime.events import (
     RuntimeEvent,
 )
 from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
-from lulu_agent.runtime.errors import ERROR_APPROVAL_DENIED
-from lulu_agent.runtime.turn import TurnRuntime
+from lulu_agent.runtime.errors import ERROR_APPROVAL_DENIED, LuluError
+from lulu_agent.runtime.turn import TurnExitReason, TurnRuntime, TurnStatus
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 from lulu_agent.tools.runtime import ToolCall, ToolRuntime
@@ -35,7 +33,7 @@ You can use tools to inspect files, write files, and run shell commands.
 Use tools when needed.
 You have a memory tool for durable global long-term memory. Only write memory when the user explicitly asks you to remember, forget, or update durable cross-project preferences, facts, or habits. Do not store project instructions, temporary task state, full chat logs, sensitive information, or unconfirmed guesses. Project instructions belong in AGENTS.md and are injected separately when present.
 You have a skill_lookup tool and a skill_manage tool for global skills in ~/.lulu/skills. Use skill_lookup list to inspect available skill metadata when the user mentions skills or when a task may need a specific stored procedure. Use skill_lookup read only for a specific relevant skill; do not read every skill by default. Skills are procedural instructions, not memory. Do not modify skill files unless the user explicitly asks.
-Tools whose names start with mcp: come from external MCP servers. Use their names and descriptions to judge when they are relevant, and do not assume external MCP tools are safe, stable, or always available. Do not write MCP configuration, server env values, or temporary MCP tool results to memory unless the user explicitly asks you to remember them.
+Tools whose names start with mcp_ come from external MCP servers. Use their names and descriptions to judge when they are relevant, and do not assume external MCP tools are safe, stable, or always available. Do not write MCP configuration, server env values, or temporary MCP tool results to memory unless the user explicitly asks you to remember them.
 For current, recent, or source-sensitive facts, use runtime_environment for relative dates, put the relevant date/year/entity/fact type in search queries, treat search snippets as leads, open trusted results when precision matters, and answer only from tool-supported evidence. For recent event status, first determine the current phase and latest completed events; if results only show schedules, previews, background, or stale facts, refine the query toward results/status/finished/latest/today before answering. If evidence is stale, conflicting, or incomplete, keep checking or state uncertainty instead of filling gaps.
 Do not claim a command succeeded unless you saw the result.
 For shell-based file operations, do not rely only on exit code. Check cwd and verify the target state with ls/test/find when needed.
@@ -115,7 +113,7 @@ class AgentLoop:
                     self.current_turn.turn_id,
                     EventPayloadBuilder.build_model_request_payload(
                         model=getattr(self.llm_client, "model", ""),
-                        stream=hasattr(self.llm_client, "stream_chat"),
+                        stream=True,
                         request_index=self.current_turn.model_calls,
                         messages=request_messages,
                         tools=tool_schemas,
@@ -146,7 +144,7 @@ class AgentLoop:
                 if not tool_calls:
                     
                     # === event emit and turn state update ===
-                    self.current_turn.complete("assistant_final")
+                    self.current_turn.complete(TurnExitReason.ASSISTANT_FINAL)
                     result = self._finalize_turn(message.content or "")
                     # === event emit and turn state update ===
 
@@ -156,11 +154,10 @@ class AgentLoop:
                     tool_message, tool_result = self._handle_tool_call(tool_call)
                     self._append_tool_message(tool_message)
                     if not tool_result.ok and tool_result.error_type == ERROR_APPROVAL_DENIED:
-                        self.current_turn.interrupt(APPROVAL_DENIED_MESSAGE, reason="approval_denied")
-                        self._emit(
-                            EVENT_ERROR,
-                            self.current_turn.turn_id,
-                            EventPayloadBuilder.build_error_payload(APPROVAL_DENIED_MESSAGE),
+                        self.current_turn.interrupt(
+                            APPROVAL_DENIED_MESSAGE,
+                            reason=TurnExitReason.APPROVAL_DENIED,
+                            error_type=ERROR_APPROVAL_DENIED,
                         )
                         turn_result = self._finalize_turn(APPROVAL_DENIED_MESSAGE)
                         return turn_result.final_response
@@ -168,12 +165,7 @@ class AgentLoop:
             message = "Reached max turns before completing the task."
 
             # === event emit and turn state update ===
-            self.current_turn.fail("max_turns_exhausted", message)
-            self._emit(
-                EVENT_ERROR,
-                self.current_turn.turn_id, 
-                EventPayloadBuilder.build_error_payload(message)
-            )
+            self.current_turn.fail(TurnExitReason.MAX_TURNS_EXHAUSTED, message)
             result = self._finalize_turn(message)
             # === event emit and turn state update ===
 
@@ -182,11 +174,6 @@ class AgentLoop:
 
             # === event emit and turn state update ===
             self.current_turn.interrupt(INTERRUPTED_MESSAGE)
-            self._emit(
-                EVENT_ERROR,
-                self.current_turn.turn_id,
-                EventPayloadBuilder.build_error_payload(self.current_turn.error or "Interrupted by user."),
-            )
             result = self._finalize_turn(self.current_turn.error or INTERRUPTED_MESSAGE)
             # === event emit and turn state update ===
 
@@ -194,13 +181,13 @@ class AgentLoop:
         except Exception as exc:
             reason = self._error_exit_reason()
 
+            if isinstance(exc, LuluError):
+                error_message, error_type = exc.error_message, exc.error_type
+            else:
+                error_message, error_type = str(exc), None
+
             # === event emit and turn state update ===
-            self.current_turn.fail(reason, str(exc))
-            self._emit(
-                EVENT_ERROR,
-                self.current_turn.turn_id,
-                EventPayloadBuilder.build_error_payload(str(exc))
-            )
+            self.current_turn.fail(reason, error_message, error_type=error_type)
             self._finalize_turn()
             # === event emit and turn state update ===
      
@@ -250,45 +237,26 @@ class AgentLoop:
         tool_schemas: list[dict],
     ):
         """请求 llm 消息, 支持流式响应 (默认) 和非流式响应"""
-        if hasattr(self.llm_client, "stream_chat"):
-            response = self._stream_assistant_message(request_messages, tool_schemas)
-            return response.message, response.streamed, response.usage
-
-        response = self.llm_client.chat(
-            messages=request_messages,
-            tools=tool_schemas,
-        )
-        return response.choices[0].message, False, extract_usage(response)
-
-    def _stream_assistant_message(
-        self,
-        request_messages: list[dict],
-        tool_schemas: list[dict],
-    ):
-        """请求 llm 流式消息"""
         turn = self._active_turn()
 
-        # === turn state update ===
-        turn.start_streaming()
-        # === turn state update ===
-
-        stream = self.llm_client.stream_chat(
-            messages=request_messages,
-            tools=tool_schemas,
-        )
-        builder = StreamingAssistantResponseBuilder()
-        for content_delta in builder.consume(stream):
-
-            # === event emit ===
+        def on_delta(content_delta: str) -> None:
+            turn.start_streaming()
             self._emit(
                 EVENT_ASSISTANT_DELTA,
                 turn.turn_id,
                 EventPayloadBuilder.build_assistant_delta_payload(content_delta),
             )
-            # === event emit ===
 
-        response = builder.build()
-        return response
+        stream = True
+        response = self.llm_client.complete(
+            ModelRequest(
+                messages=request_messages,
+                tools=tool_schemas,
+                stream=stream,
+            ),
+            on_delta=on_delta,
+        )
+        return response.message, response.streamed, response.usage
 
     # === 消息加载/存储 ===
     def _load_or_initialize_messages(self) -> list[dict]:
@@ -421,6 +389,7 @@ class AgentLoop:
                 status=turn_record.status,
                 exit_reason=turn_record.exit_reason,
                 error=turn_record.error,
+                error_type=turn_record.error_type,
                 model_calls=turn.model_calls,
                 tool_calls=turn.tool_calls,
             ),
@@ -430,7 +399,7 @@ class AgentLoop:
 
     def _review_knowledge(self, turn_record) -> None:
         """成功 turn 结束后启动后台 knowledge reviewers, 不污染主链路"""
-        if turn_record.status != "completed" or not turn_record.final_response:
+        if turn_record.status != TurnStatus.COMPLETED or not turn_record.final_response:
             return
 
         reviewers = (
@@ -462,13 +431,13 @@ class AgentLoop:
 
     def _error_exit_reason(self):
         turn = self._active_turn()
-        if turn.status == "streaming_assistant":
-            return "stream_error"
-        if turn.status == "running_tool":
-            return "tool_error"
-        if turn.status == "requesting_model":
-            return "model_error"
-        return "unknown_error"
+        if turn.status == TurnStatus.STREAMING_ASSISTANT:
+            return TurnExitReason.STREAM_ERROR
+        if turn.status == TurnStatus.RUNNING_TOOL:
+            return TurnExitReason.TOOL_ERROR
+        if turn.status == TurnStatus.REQUESTING_MODEL:
+            return TurnExitReason.MODEL_ERROR
+        return TurnExitReason.UNKNOWN_ERROR
 
     def _active_turn(self) -> TurnRuntime:
         if self.current_turn is None:

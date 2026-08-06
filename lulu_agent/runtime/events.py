@@ -17,7 +17,6 @@ class RuntimeEventType(StrEnum):
     APPROVAL_REQUEST = "approval_request"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
-    ERROR = "error"
     TURN_END = "turn_end"
 
 
@@ -29,7 +28,6 @@ EVENT_ASSISTANT_MESSAGE = RuntimeEventType.ASSISTANT_MESSAGE
 EVENT_APPROVAL_REQUEST = RuntimeEventType.APPROVAL_REQUEST
 EVENT_TOOL_CALL = RuntimeEventType.TOOL_CALL
 EVENT_TOOL_RESULT = RuntimeEventType.TOOL_RESULT
-EVENT_ERROR = RuntimeEventType.ERROR
 EVENT_TURN_END = RuntimeEventType.TURN_END
 
 
@@ -124,15 +122,11 @@ class ToolResultPayload:
 
 
 @dataclass(frozen=True)
-class ErrorPayload:
-    message: str
-
-
-@dataclass(frozen=True)
 class TurnEndPayload:
     status: str
     exit_reason: str
     error: str | None = None
+    error_type: ErrorType | None = None
     model_calls: int = 0
     tool_calls: int = 0
 
@@ -146,7 +140,6 @@ RuntimeEventPayload = (
     | ApprovalRequestPayload
     | ToolCallPayload
     | ToolResultPayload
-    | ErrorPayload
     | TurnEndPayload
 )
 
@@ -160,7 +153,6 @@ EVENT_PAYLOAD_MODELS: dict[str, type[RuntimeEventPayload]] = {
     EVENT_APPROVAL_REQUEST: ApprovalRequestPayload,
     EVENT_TOOL_CALL: ToolCallPayload,
     EVENT_TOOL_RESULT: ToolResultPayload,
-    EVENT_ERROR: ErrorPayload,
     EVENT_TURN_END: TurnEndPayload,
 }
 
@@ -271,14 +263,11 @@ class EventPayloadBuilder:
         )
 
     @staticmethod
-    def build_error_payload(message: str) -> dict[str, Any]:
-        return payload_to_dict(ErrorPayload(message=message))
-
-    @staticmethod
     def build_turn_end_payload(
         status: str,
         exit_reason: str,
         error: str | None = None,
+        error_type: ErrorType | None = None,
         model_calls: int = 0,
         tool_calls: int = 0,
     ) -> dict[str, Any]:
@@ -287,6 +276,7 @@ class EventPayloadBuilder:
                 status=status,
                 exit_reason=exit_reason,
                 error=error,
+                error_type=error_type,
                 model_calls=model_calls,
                 tool_calls=tool_calls,
             )

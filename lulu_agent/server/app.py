@@ -105,6 +105,13 @@ def create_app(runner: ServerRunner | None = None):
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/runtime/model")
+    def get_model_config() -> dict[str, Any]:
+        try:
+            return {"model_config": runner.get_model_config()}
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     @app.get("/sessions/{session_id}/mcp-tools")
     def list_mcp_tools(session_id: str) -> dict[str, Any]:
         try:
