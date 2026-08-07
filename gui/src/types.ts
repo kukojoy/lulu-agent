@@ -52,8 +52,12 @@ export type TaskState = {
 
 export type RuntimeState = {
   session_id: string;
+  active?: boolean;
   running: boolean;
   connected: boolean;
+  active_turn_id?: string | null;
+  status?: string | null;
+  pending_approval?: ApprovalRequestView | null;
   notices?: string[];
 };
 

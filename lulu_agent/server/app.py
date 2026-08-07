@@ -245,12 +245,15 @@ def create_app(runner: ServerRunner | None = None):
                     code = "session_not_found"
                 elif isinstance(exc, ConfigError):
                     code = "config_error"
+                payload = {"message": str(exc), "code": code}
+                if not isinstance(exc, SessionStoreError):
+                    payload["runtime"] = runner.get_runtime_state(session_id)
                 await websocket.send_json(
                     {
                         "type": "server_error",
                         "turn_id": "",
                         "timestamp": "",
-                        "payload": {"message": str(exc), "code": code},
+                        "payload": payload,
                     }
                 )
             except ServerRunnerError as exc:
@@ -259,7 +262,11 @@ def create_app(runner: ServerRunner | None = None):
                         "type": "server_error",
                         "turn_id": "",
                         "timestamp": "",
-                        "payload": {"message": str(exc), "code": exc.code},
+                        "payload": {
+                            "message": str(exc),
+                            "code": exc.code,
+                            "runtime": runner.get_runtime_state(session_id),
+                        },
                     }
                 )
 
@@ -278,6 +285,23 @@ def create_app(runner: ServerRunner | None = None):
                                 "payload": {
                                     "message": "Approval request not found.",
                                     "code": "approval_not_found",
+                                    "runtime": runner.get_runtime_state(session_id),
+                                },
+                            }
+                        )
+                    continue
+
+                if command.get("type") == "interrupt":
+                    if not runner.interrupt_session(session_id):
+                        await websocket.send_json(
+                            {
+                                "type": "server_error",
+                                "turn_id": "",
+                                "timestamp": "",
+                                "payload": {
+                                    "message": "No running turn to interrupt.",
+                                    "code": "interrupt_unavailable",
+                                    "runtime": runner.get_runtime_state(session_id),
                                 },
                             }
                         )
@@ -292,6 +316,7 @@ def create_app(runner: ServerRunner | None = None):
                             "payload": {
                                 "message": "Unsupported command type.",
                                 "code": "invalid_command",
+                                "runtime": runner.get_runtime_state(session_id),
                             },
                         }
                     )

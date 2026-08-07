@@ -37,11 +37,13 @@ class ServerApprovalProvider(ApprovalProvider):
         self.timeout_seconds = timeout_seconds
         self._lock = threading.Lock()
         self._pending: dict[str, queue.Queue[bool]] = {}
+        self._requests: dict[str, ApprovalRequest] = {}
 
     def request_approval(self, request: ApprovalRequest) -> bool:
         response_queue: queue.Queue[bool] = queue.Queue(maxsize=1)
         with self._lock:
             self._pending[request.request_id] = response_queue
+            self._requests[request.request_id] = request
 
         self.event_hub.publish(
             self.session_id,
@@ -64,6 +66,7 @@ class ServerApprovalProvider(ApprovalProvider):
         finally:
             with self._lock:
                 self._pending.pop(request.request_id, None)
+                self._requests.pop(request.request_id, None)
 
     def resolve(self, request_id: str, approved: bool) -> bool:
         with self._lock:
@@ -75,6 +78,30 @@ class ServerApprovalProvider(ApprovalProvider):
         except queue.Full:
             return False
         return True
+
+    def cancel_pending(self) -> int:
+        with self._lock:
+            queues = list(self._pending.values())
+        cancelled = 0
+        for response_queue in queues:
+            try:
+                response_queue.put_nowait(False)
+                cancelled += 1
+            except queue.Full:
+                continue
+        return cancelled
+
+    def pending_request(self) -> dict[str, str] | None:
+        with self._lock:
+            request = next(iter(self._requests.values()), None)
+        if request is None:
+            return None
+        return {
+            "request_id": request.request_id,
+            "category": request.category,
+            "reason": request.reason,
+            "subject": request.subject,
+        }
 
 
 class ServerRunner:
@@ -113,16 +140,27 @@ class ServerRunner:
         lock = self._lock_for_session(session_id)
         with self._lock:
             agent = self._agents.get(session_id)
+            provider = self._approval_providers.get(session_id)
         notices = []
+        active_turn_id = None
+        status = None
         if agent is not None:
             notices = [
                 f"MCP warning [{issue.source}]: {issue.issue_message}"
                 for issue in agent.tool_registry.get_issues()
             ]
+            current_turn = getattr(agent, "current_turn", None)
+            if current_turn is not None:
+                active_turn_id = current_turn.turn_id
+                status = getattr(current_turn.status, "value", current_turn.status)
         return {
             "session_id": session_id,
+            "active": agent is not None,
             "running": lock.locked(),
             "connected": self.event_hub.subscriber_count(session_id) > 0,
+            "active_turn_id": active_turn_id,
+            "status": status,
+            "pending_approval": provider.pending_request() if provider is not None else None,
             "notices": notices,
         }
 
@@ -175,7 +213,11 @@ class ServerRunner:
         return result.to_dict(("name", "description", "path", "directory", "content"))
 
     def list_mcp_tools(self, session_id: str) -> dict[str, Any]:
-        agent = self._agent_for_session(session_id)
+        self.session_service.resume_session(session_id)
+        with self._lock:
+            agent = self._agents.get(session_id)
+        if agent is None:
+            return {"servers": []}
         return agent.tool_registry.list_mcp_tools()
 
     def run_message(self, session_id: str, content: str) -> dict[str, Any]:
@@ -194,6 +236,18 @@ class ServerRunner:
             "session_id": session_id,
             "response": response,
         }
+
+    def interrupt_session(self, session_id: str) -> bool:
+        self.session_service.resume_session(session_id)
+        with self._lock:
+            agent = self._agents.get(session_id)
+            provider = self._approval_providers.get(session_id)
+        if agent is None:
+            return False
+        interrupted = agent.request_interrupt()
+        if provider is not None:
+            provider.cancel_pending()
+        return interrupted
 
     def resolve_approval(self, session_id: str, request_id: str, approved: bool) -> bool:
         self.session_service.resume_session(session_id)

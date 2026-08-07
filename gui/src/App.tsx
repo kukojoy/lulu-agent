@@ -14,6 +14,7 @@ import {
   PanelRightOpen,
   RefreshCcw,
   Send,
+  Square,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import {
   getModelConfig,
   getRuntimeState,
   getTaskState,
+  getTraceTimeline,
   listMcpTools,
   inspectSession,
   listSkills,
@@ -52,6 +54,9 @@ import type {
 } from "./types";
 
 type InspectorView = "task" | "memory" | "skills" | "mcp";
+type ConnectionStatus = "draft" | "connecting" | "ready" | "reconnecting";
+
+const RUN_SOCKET_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000];
 
 function shortSessionId(sessionId: string): string {
   return sessionId.replace(/^session-/, "");
@@ -120,8 +125,16 @@ function runtimeStateFromPayload(value: unknown): RuntimeState | null {
   }
   return {
     session_id: candidate.session_id,
+    active: Boolean(candidate.active),
     running: Boolean(candidate.running),
     connected: Boolean(candidate.connected),
+    active_turn_id:
+      typeof candidate.active_turn_id === "string" ? candidate.active_turn_id : null,
+    status: typeof candidate.status === "string" ? candidate.status : null,
+    pending_approval:
+      candidate.pending_approval && typeof candidate.pending_approval === "object"
+        ? approvalRequestFromPayload(candidate.pending_approval as Record<string, unknown>)
+        : null,
     notices: Array.isArray(candidate.notices)
       ? candidate.notices.filter((notice): notice is string => typeof notice === "string")
       : [],
@@ -161,6 +174,9 @@ function formatServerError(payload: Record<string, unknown>): string {
   }
   if (code === "approval_not_found") {
     return "Approval request is no longer pending.";
+  }
+  if (code === "interrupt_unavailable") {
+    return "There is no running turn to interrupt.";
   }
   return message;
 }
@@ -442,19 +458,33 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [eventStreamReady, setEventStreamReady] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("draft");
   const [streamingMessage, setStreamingMessage] = useState("");
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestView | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(new Set());
-  const [modelConfigOpen, setModelConfigOpen] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingFirstMessageRef = useRef<{ sessionId: string; content: string } | null>(null);
   const runningSessionIdRef = useRef("");
   const pendingSentMessageRef = useRef("");
   const pendingToolReasoningRef = useRef("");
+  const reconnectTimerRef = useRef<number | null>(null);
   const inspectorResizeRef = useRef({ startX: 0, startWidth: 0 });
+
+  const applyRuntimeState = useCallback((nextRuntimeState: RuntimeState) => {
+    setRuntimeState(nextRuntimeState);
+    if (nextRuntimeState.running) {
+      runningSessionIdRef.current = nextRuntimeState.session_id;
+      setBusy(true);
+    } else if (runningSessionIdRef.current === nextRuntimeState.session_id) {
+      runningSessionIdRef.current = "";
+      pendingSentMessageRef.current = "";
+      setBusy(false);
+    }
+    setApprovalRequest(nextRuntimeState.pending_approval ?? null);
+  }, []);
 
   const resizeInspector = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -477,18 +507,62 @@ export function App() {
     setSessions(nextSessions);
   }, []);
 
-  const refreshSession = useCallback(async (sessionId: string) => {
-    const [nextInspection, nextMessages, nextTaskState, nextRuntimeState] = await Promise.all([
-      inspectSession(sessionId),
-      loadMessages(sessionId),
-      getTaskState(sessionId),
-      getRuntimeState(sessionId),
-    ]);
-    setInspection(nextInspection);
-    setMessages(nextMessages);
-    setTaskState(nextTaskState);
-    setRuntimeState(nextRuntimeState);
-  }, []);
+  const restoreStreamingMessageFromTrace = useCallback(
+    async (sessionId: string, turnId: string | null | undefined) => {
+      if (!turnId) {
+        return;
+      }
+      const timeline = await getTraceTimeline(sessionId, turnId);
+      const restored = timeline
+        .filter((item) => item.event_type === "assistant_delta")
+        .map((item) => {
+          const delta = item.payload?.delta;
+          return typeof delta === "string" ? delta : "";
+        })
+        .join("");
+      if (!restored) {
+        return;
+      }
+      setStreamingMessage((current) => {
+        if (!current) {
+          return restored;
+        }
+        if (restored === current || restored.endsWith(current) || restored.includes(current)) {
+          return restored;
+        }
+        if (current.startsWith(restored)) {
+          return current;
+        }
+        return `${restored}${current}`;
+      });
+    },
+    [],
+  );
+
+  const refreshSession = useCallback(
+    async (sessionId: string) => {
+      const [nextInspection, nextMessages, nextTaskState, nextRuntimeState] = await Promise.all([
+        inspectSession(sessionId),
+        loadMessages(sessionId),
+        getTaskState(sessionId),
+        getRuntimeState(sessionId),
+      ]);
+      setInspection(nextInspection);
+      setMessages(nextMessages);
+      setTaskState(nextTaskState);
+      applyRuntimeState(nextRuntimeState);
+      if (!nextRuntimeState.active) {
+        setMemoryView(null);
+        setSkillList(null);
+        setSelectedSkill(null);
+        setMcpTools(null);
+      }
+      if (nextRuntimeState.running && nextRuntimeState.status === "streaming_assistant") {
+        await restoreStreamingMessageFromTrace(sessionId, nextRuntimeState.active_turn_id);
+      }
+    },
+    [applyRuntimeState, restoreStreamingMessageFromTrace],
+  );
 
   const refreshActiveSession = useCallback(async () => {
     if (!activeSessionId) {
@@ -497,6 +571,9 @@ export function App() {
       setTaskState(null);
       setRuntimeState(null);
       setLiveToolItems([]);
+      setMemoryView(null);
+      setSkillList(null);
+      setSelectedSkill(null);
       setMcpTools(null);
       return;
     }
@@ -507,25 +584,37 @@ export function App() {
   }, [activeSessionId, refreshSession]);
 
   const refreshMemory = useCallback(async () => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setMemoryView(null);
+      return;
+    }
     setMemoryView(await getMemory());
-  }, []);
+  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshSkills = useCallback(async () => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setSkillList(null);
+      setSelectedSkill(null);
+      return;
+    }
     const nextSkillList = await listSkills();
     setSkillList(nextSkillList);
-  }, []);
+  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshMcpTools = useCallback(async () => {
-    if (!activeSessionId) {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       setMcpTools(null);
       return;
     }
     setMcpTools(await listMcpTools(activeSessionId));
-  }, [activeSessionId]);
+  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
   const loadSkill = useCallback(async (name: string) => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      return;
+    }
     setSelectedSkill(await readSkill(name));
-  }, []);
+  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
   function toggleMcpServer(name: string) {
     setExpandedMcpServers((current) => {
@@ -550,6 +639,27 @@ export function App() {
     setStreamingMessage((current) => `${current}${delta}`);
   }, []);
 
+  const setLiveRuntimeStatus = useCallback(
+    (status: string, turnId: string | null = null) => {
+      if (!activeSessionId) {
+        return;
+      }
+      runningSessionIdRef.current = activeSessionId;
+      setBusy(true);
+      setRuntimeState((current) => ({
+        session_id: activeSessionId,
+        active: true,
+        running: true,
+        connected: true,
+        active_turn_id: turnId ?? (current?.session_id === activeSessionId ? current.active_turn_id ?? null : null),
+        status,
+        pending_approval: current?.session_id === activeSessionId ? current.pending_approval ?? null : null,
+        notices: current?.session_id === activeSessionId ? current.notices : [],
+      }));
+    },
+    [activeSessionId],
+  );
+
   const runSessionMessage = useCallback(
     (sessionId: string, content: string) => {
       if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
@@ -560,10 +670,15 @@ export function App() {
         return;
       }
       runningSessionIdRef.current = sessionId;
+      setBusy(true);
       setRuntimeState((current) => ({
         session_id: sessionId,
+        active: true,
         running: true,
         connected: true,
+        active_turn_id: current?.session_id === sessionId ? current.active_turn_id ?? null : null,
+        status: current?.session_id === sessionId ? current.status ?? null : null,
+        pending_approval: null,
         notices: current?.session_id === sessionId ? current.notices : [],
       }));
       socketRef.current.send(JSON.stringify({ type: "user_message", content }));
@@ -586,6 +701,13 @@ export function App() {
   }, [refreshActiveSession]);
 
   useEffect(() => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setMemoryView(null);
+      setSkillList(null);
+      setSelectedSkill(null);
+      setMcpTools(null);
+      return;
+    }
     if (!taskOpen) {
       return;
     }
@@ -598,172 +720,244 @@ export function App() {
     if (inspectorView === "mcp") {
       refreshMcpTools().catch((nextError) => setError(String(nextError)));
     }
-  }, [inspectorView, refreshMemory, refreshSkills, refreshMcpTools, taskOpen]);
+  }, [
+    activeSessionId,
+    inspectorView,
+    refreshMemory,
+    refreshSkills,
+    refreshMcpTools,
+    runtimeState?.active,
+    runtimeState?.session_id,
+    taskOpen,
+  ]);
 
   useEffect(() => {
+    let disposed = false;
+    let reconnectAttempt = 0;
+
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     socketRef.current?.close();
     clearLiveTurnState();
-    setEventStreamReady(false);
     if (!activeSessionId) {
+      setConnectionStatus("draft");
       return;
     }
-    const socket = openRunSocket(activeSessionId, (event) => {
-      if (socketRef.current !== socket) {
+    setConnectionStatus("connecting");
+
+    const connect = (isReconnect = false) => {
+      if (disposed) {
         return;
       }
-      if (event.type === "server_ready") {
-        setEventStreamReady(true);
-        const nextRuntimeState = runtimeStateFromPayload(event.payload.runtime);
-        if (nextRuntimeState) {
-          setRuntimeState(nextRuntimeState);
-          if (nextRuntimeState.running) {
-            runningSessionIdRef.current = nextRuntimeState.session_id;
-            setBusy(true);
-          }
-        }
-        const pending = pendingFirstMessageRef.current;
-        if (pending?.sessionId === activeSessionId) {
-          pendingFirstMessageRef.current = null;
-          void runSessionMessage(pending.sessionId, pending.content);
-        }
-        return;
-      }
-      if (event.type === "server_error") {
-        const code = typeof event.payload.code === "string" ? event.payload.code : "";
-        if (code === "session_running" && pendingSentMessageRef.current) {
-          setDraft(pendingSentMessageRef.current);
-        }
-        setError(formatServerError(event.payload));
-        pendingFirstMessageRef.current = null;
-        runningSessionIdRef.current = "";
-        pendingSentMessageRef.current = "";
-        const currentRuntime = runtimeStateFromPayload(event.payload.runtime);
-        setRuntimeState(
-          currentRuntime ??
-            (activeSessionId
-              ? { session_id: activeSessionId, running: false, connected: true }
-              : null),
-        );
-        setBusy(false);
-        return;
-      }
-      if (event.type === "assistant_delta") {
-        if (activeSessionId) {
-          setRuntimeState((current) => ({
-            session_id: activeSessionId,
-            running: true,
-            connected: true,
-            notices: current?.session_id === activeSessionId ? current.notices : [],
-          }));
-        }
-        appendStreamingDelta(String(event.payload.delta ?? ""));
-        return;
-      }
-      if (event.type === "approval_request") {
-        const request = approvalRequestFromPayload(event.payload);
-        if (request) {
-          setApprovalRequest(request);
-        }
-        return;
-      }
-      if (event.type === "assistant_message") {
-        const toolCallCount = Number(event.payload.tool_call_count ?? 0);
-        if (toolCallCount > 0) {
-          pendingToolReasoningRef.current = String(event.payload.content ?? "").trim();
-          setStreamingMessage("");
+      setConnectionStatus(isReconnect ? "reconnecting" : "connecting");
+      const socket = openRunSocket(activeSessionId, (event) => {
+        if (socketRef.current !== socket) {
           return;
         }
-        if (!event.payload.streamed) {
-          clearLiveTurnState();
-          appendStreamingDelta(String(event.payload.content ?? ""));
+        if (event.type === "server_ready") {
+          reconnectAttempt = 0;
+          setConnectionStatus("ready");
+          const nextRuntimeState = runtimeStateFromPayload(event.payload.runtime);
+          if (nextRuntimeState) {
+            applyRuntimeState(nextRuntimeState);
+            if (nextRuntimeState.running && nextRuntimeState.status === "streaming_assistant") {
+              restoreStreamingMessageFromTrace(
+                nextRuntimeState.session_id,
+                nextRuntimeState.active_turn_id,
+              ).catch((nextError) => setError(String(nextError)));
+            }
+          }
+          const pending = pendingFirstMessageRef.current;
+          if (pending?.sessionId === activeSessionId) {
+            pendingFirstMessageRef.current = null;
+            void runSessionMessage(pending.sessionId, pending.content);
+          }
+          if (isReconnect) {
+            refreshActiveSession().catch((nextError) => setError(String(nextError)));
+            refreshSessions().catch((nextError) => setError(String(nextError)));
+          }
+          return;
         }
-        return;
-      }
-      if (event.type === "tool_call" || event.type === "tool_result") {
-        const reasoning = event.type === "tool_call" ? pendingToolReasoningRef.current : "";
-        const item = runtimeToolItem(event, reasoning);
-        if (item) {
-          setLiveToolItems((current) => [...current, item]);
-          if (event.type === "tool_call") {
-            pendingToolReasoningRef.current = "";
+        if (event.type === "server_error") {
+          const code = typeof event.payload.code === "string" ? event.payload.code : "";
+          if (code === "session_running" && pendingSentMessageRef.current) {
+            setDraft(pendingSentMessageRef.current);
+          }
+          setError(formatServerError(event.payload));
+          pendingFirstMessageRef.current = null;
+          runningSessionIdRef.current = "";
+          pendingSentMessageRef.current = "";
+          const currentRuntime = runtimeStateFromPayload(event.payload.runtime);
+          if (currentRuntime) {
+            applyRuntimeState(currentRuntime);
+          } else {
+            setRuntimeState(
+              activeSessionId
+                ? { session_id: activeSessionId, active: false, running: false, connected: true }
+                : null,
+            );
+          }
+          if (!currentRuntime?.running) {
+            setBusy(false);
+          }
+          return;
+        }
+        if (event.type === "model_request") {
+          setLiveRuntimeStatus("requesting_model", event.turn_id || null);
+          return;
+        }
+        if (event.type === "assistant_delta") {
+          setLiveRuntimeStatus("streaming_assistant", event.turn_id || null);
+          appendStreamingDelta(String(event.payload.delta ?? ""));
+          return;
+        }
+        if (event.type === "approval_request") {
+          const request = approvalRequestFromPayload(event.payload);
+          if (request) {
+            setApprovalRequest(request);
+            setLiveRuntimeStatus("running_tool", event.turn_id || null);
+          }
+          return;
+        }
+        if (event.type === "assistant_message") {
+          const toolCallCount = Number(event.payload.tool_call_count ?? 0);
+          if (toolCallCount > 0) {
+            pendingToolReasoningRef.current = String(event.payload.content ?? "").trim();
+            setStreamingMessage("");
+            return;
+          }
+          setLiveRuntimeStatus("finalizing", event.turn_id || null);
+          if (!event.payload.streamed) {
+            clearLiveTurnState();
+            appendStreamingDelta(String(event.payload.content ?? ""));
+          }
+          return;
+        }
+        if (event.type === "tool_call" || event.type === "tool_result") {
+          setLiveRuntimeStatus("running_tool", event.turn_id || null);
+          const reasoning = event.type === "tool_call" ? pendingToolReasoningRef.current : "";
+          const item = runtimeToolItem(event, reasoning);
+          if (item) {
+            setLiveToolItems((current) => [...current, item]);
+            if (event.type === "tool_call") {
+              pendingToolReasoningRef.current = "";
+            }
+          }
+          return;
+        }
+        if (event.type === "turn_end") {
+          const turnError = event.payload.error;
+          if (turnError) {
+            setLiveToolItems((current) => [
+              ...current,
+              {
+                id: `live-${event.turn_id}-error-${current.length}`,
+                kind: "runtime_error",
+                content: String(turnError),
+                errorType:
+                  typeof event.payload.error_type === "string"
+                    ? event.payload.error_type
+                    : null,
+              },
+            ]);
+          }
+          refreshActiveSession()
+            .then(() => {
+              clearLiveTurnState();
+              runningSessionIdRef.current = "";
+              pendingSentMessageRef.current = "";
+              setBusy(false);
+              if (activeSessionId) {
+                setRuntimeState((current) => ({
+                  session_id: activeSessionId,
+                  active: true,
+                  running: false,
+                  connected: true,
+                  active_turn_id: null,
+                  status: null,
+                  pending_approval: null,
+                  notices: current?.session_id === activeSessionId ? current.notices : [],
+                }));
+              }
+            })
+            .catch((nextError) => {
+              setError(String(nextError));
+              runningSessionIdRef.current = "";
+              pendingSentMessageRef.current = "";
+              setBusy(false);
+            });
+          refreshSessions().catch((nextError) => setError(String(nextError)));
+        }
+      });
+      socketRef.current = socket;
+      socket.onclose = () => {
+        if (socketRef.current === socket) {
+          if (activeSessionId) {
+            getRuntimeState(activeSessionId)
+              .then((nextRuntimeState) =>
+                applyRuntimeState({ ...nextRuntimeState, connected: false }),
+              )
+              .catch(() => {
+                setRuntimeState((current) =>
+                  current && current.session_id === activeSessionId
+                    ? { ...current, connected: false }
+                    : current,
+                );
+              });
+          }
+          if (!disposed) {
+            const delay = RUN_SOCKET_RECONNECT_DELAYS_MS[reconnectAttempt];
+            if (delay === undefined) {
+              setConnectionStatus("connecting");
+              setError("Run socket disconnected. Refresh or switch sessions to reconnect.");
+              return;
+            }
+            reconnectAttempt += 1;
+            setConnectionStatus("reconnecting");
+            reconnectTimerRef.current = window.setTimeout(() => {
+              reconnectTimerRef.current = null;
+              connect(true);
+            }, delay);
           }
         }
-        return;
-      }
-      if (event.type === "turn_end") {
-        const turnError = event.payload.error;
-        if (turnError) {
-          setLiveToolItems((current) => [
-            ...current,
-            {
-              id: `live-${event.turn_id}-error-${current.length}`,
-              kind: "runtime_error",
-              content: String(turnError),
-              errorType:
-                typeof event.payload.error_type === "string"
-                  ? event.payload.error_type
-                  : null,
-            },
-          ]);
-        }
-        refreshActiveSession()
-          .then(() => {
-            clearLiveTurnState();
+      };
+      socket.onerror = () => {
+        if (socketRef.current === socket) {
+          pendingFirstMessageRef.current = null;
+          if (activeSessionId) {
+            getRuntimeState(activeSessionId)
+              .then((nextRuntimeState) =>
+                applyRuntimeState({ ...nextRuntimeState, connected: false }),
+              )
+              .catch(() => {
+                runningSessionIdRef.current = "";
+                pendingSentMessageRef.current = "";
+                setBusy(false);
+              });
+          } else {
             runningSessionIdRef.current = "";
             pendingSentMessageRef.current = "";
             setBusy(false);
-            if (activeSessionId) {
-              return getRuntimeState(activeSessionId).then(setRuntimeState);
-            }
-          })
-          .catch((nextError) => {
-            setError(String(nextError));
-            runningSessionIdRef.current = "";
-            pendingSentMessageRef.current = "";
-            setBusy(false);
-          });
-        refreshSessions().catch((nextError) => setError(String(nextError)));
-      }
-    });
-    socketRef.current = socket;
-    socket.onopen = () => {
-      if (socketRef.current === socket) {
-        setEventStreamReady(true);
-      }
-    };
-    socket.onclose = () => {
-      if (socketRef.current === socket) {
-        setEventStreamReady(false);
-        setRuntimeState((current) =>
-          current && current.session_id === activeSessionId
-            ? { ...current, connected: false }
-            : current,
-        );
-        if (runningSessionIdRef.current === activeSessionId) {
-          runningSessionIdRef.current = "";
-          setBusy(false);
+          }
         }
-      }
+      };
     };
-    socket.onerror = () => {
-      if (socketRef.current === socket) {
-        setEventStreamReady(false);
-        pendingFirstMessageRef.current = null;
-        runningSessionIdRef.current = "";
-        pendingSentMessageRef.current = "";
-        setBusy(false);
-      }
-    };
+    connect();
     return () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        setEventStreamReady(false);
+      disposed = true;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
-      socket.close();
+      socketRef.current?.close();
+      socketRef.current = null;
     };
   }, [
     activeSessionId,
     appendStreamingDelta,
+    applyRuntimeState,
     clearLiveTurnState,
     refreshActiveSession,
     refreshSessions,
@@ -790,13 +984,49 @@ export function App() {
         ? runtimeState.running
         : busy && runningSessionIdRef.current === activeSessionId),
   );
+  const currentSessionActive = Boolean(
+    activeSessionId && runtimeState?.session_id === activeSessionId && runtimeState.active,
+  );
   const runtimeNotices =
     runtimeState?.session_id === activeSessionId ? runtimeState.notices ?? [] : [];
-  const composerDisabled = currentSessionRunning || Boolean(activeSessionId && !eventStreamReady);
+  const composerDisabled =
+    currentSessionRunning || Boolean(activeSessionId && connectionStatus !== "ready");
+  const statusLabel = !activeSessionId
+    ? "Draft"
+    : connectionStatus === "reconnecting"
+      ? "Reconnecting"
+      : connectionStatus !== "ready"
+        ? "Connecting"
+        : !currentSessionActive
+          ? "Chat to start"
+        : approvalRequest
+          ? "Waiting approval"
+          : runtimeState?.status === "interrupting"
+            ? "Interrupting"
+          : runtimeState?.status === "requesting_model"
+            ? "Requesting model"
+            : runtimeState?.status === "streaming_assistant"
+              ? "Streaming"
+              : runtimeState?.status === "running_tool"
+                ? "Running tool"
+                : runtimeState?.status === "finalizing"
+                  ? "Finalizing"
+                  : currentSessionRunning
+                    ? "Running"
+                    : "Ready";
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [activeSessionId, visibleChatItems.length, showStreamingMessage, streamingMessage]);
+
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [draft]);
 
   async function handleCreateSession() {
     setError("");
@@ -805,6 +1035,9 @@ export function App() {
     setMessages([]);
     setTaskState(null);
     setRuntimeState(null);
+    setMemoryView(null);
+    setSkillList(null);
+    setSelectedSkill(null);
     setMcpTools(null);
     clearLiveTurnState();
     pendingFirstMessageRef.current = null;
@@ -848,7 +1081,13 @@ export function App() {
       if (!activeSessionId) {
         const session = await createSession();
         runningSessionIdRef.current = session.session_id;
-        setRuntimeState({ session_id: session.session_id, running: true, connected: false, notices: [] });
+        setRuntimeState({
+          session_id: session.session_id,
+          active: true,
+          running: true,
+          connected: false,
+          notices: [],
+        });
         pendingFirstMessageRef.current = {
           sessionId: session.session_id,
           content,
@@ -879,6 +1118,24 @@ export function App() {
       }),
     );
     setApprovalRequest(null);
+  }
+
+  function interruptTurn() {
+    if (!activeSessionId || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socketRef.current.send(JSON.stringify({ type: "interrupt" }));
+    setApprovalRequest(null);
+    setRuntimeState((current) => ({
+      session_id: activeSessionId,
+      active: true,
+      running: true,
+      connected: true,
+      active_turn_id: current?.session_id === activeSessionId ? current.active_turn_id ?? null : null,
+      status: "interrupting",
+      pending_approval: null,
+      notices: current?.session_id === activeSessionId ? current.notices : [],
+    }));
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -977,22 +1234,6 @@ export function App() {
             <h2>{activeSession?.title || "New session"}</h2>
             <p>{activeSessionId || "Session will be created on first message"}</p>
           </div>
-          <div className="runtime-status">
-            {runtimeNotices.length > 0 && (
-              <span className="notice-indicator" aria-label={runtimeNotices.join("\n")}>
-                !
-                <span className="notice-tooltip" role="tooltip">
-                  {runtimeNotices.map((notice, index) => (
-                    <span key={`notice-${index}`}>{notice}</span>
-                  ))}
-                </span>
-              </span>
-            )}
-            <div className="status-pill">
-              <Activity size={15} />
-              {currentSessionRunning ? "Running" : activeSessionId ? eventStreamReady ? "Ready" : "Connecting" : "Draft"}
-            </div>
-          </div>
         </header>
 
         {error && (
@@ -1088,48 +1329,58 @@ export function App() {
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
-          <button
-            className="model-config-toggle"
-            type="button"
-            onClick={() => setModelConfigOpen((current) => !current)}
-            aria-expanded={modelConfigOpen}
-            title="Model configuration"
-          >
-            {modelConfigOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-            <span>{modelConfig?.model || "Model unavailable"}</span>
-            {modelConfig?.base_url_host && <small>{modelConfig.base_url_host}</small>}
-          </button>
-          {modelConfigOpen && (
-            <div className="model-config-detail">
-              <span>
-                <strong>model</strong>
-                {modelConfig?.model || "unknown"}
-              </span>
-              <span>
-                <strong>host</strong>
-                {modelConfig?.base_url_host || "unknown"}
-              </span>
-              <span>
-                <strong>timeout</strong>
-                {modelConfig ? `${modelConfig.timeout_seconds}s` : "unknown"}
-              </span>
+          <div className="composer-box">
+            <textarea
+              ref={composerTextareaRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="Ask lulu-agent..."
+              rows={2}
+              disabled={currentSessionRunning}
+            />
+            <div className="composer-meta">
+              <div className="runtime-status">
+                {runtimeNotices.length > 0 && (
+                  <span className="notice-indicator" aria-label={runtimeNotices.join("\n")}>
+                    !
+                    <span className="notice-tooltip" role="tooltip">
+                      {runtimeNotices.map((notice, index) => (
+                        <span key={`notice-${index}`}>{notice}</span>
+                      ))}
+                    </span>
+                  </span>
+                )}
+                <div className="status-pill">
+                  <Activity size={15} />
+                  {statusLabel}
+                </div>
+              </div>
+              <div className="model-config-pill" title="Model configuration">
+                <span>{modelConfig?.model || "Model unavailable"}</span>
+                {modelConfig?.base_url_host && <small>{modelConfig.base_url_host}</small>}
+              </div>
             </div>
-          )}
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleComposerKeyDown}
-            placeholder="Ask lulu-agent..."
-            rows={2}
-            disabled={currentSessionRunning}
-          />
-          <button
-            className="send-button"
-            disabled={!draft.trim() || composerDisabled}
-            type="submit"
-          >
-            <Send size={18} />
-          </button>
+            {currentSessionRunning ? (
+              <button
+                className="send-button"
+                disabled={!activeSessionId || connectionStatus !== "ready"}
+                title="Interrupt current turn"
+                type="button"
+                onClick={interruptTurn}
+              >
+                <Square size={17} />
+              </button>
+            ) : (
+              <button
+                className="send-button"
+                disabled={!draft.trim() || composerDisabled}
+                type="submit"
+              >
+                <Send size={18} />
+              </button>
+            )}
+          </div>
         </form>
       </section>
 
@@ -1193,7 +1444,9 @@ export function App() {
                 <PanelRightClose size={17} />
               </button>
             </div>
-            {inspectorView === "task" && taskState ? (
+            {inspectorView === "task" && !currentSessionActive ? (
+              <p className="muted">Chat with lulu in this session to load task state.</p>
+            ) : inspectorView === "task" && taskState ? (
               <div className="task-block">
                 <strong>{taskState.goal}</strong>
                 <span className="status-chip">{taskState.status}</span>
@@ -1217,7 +1470,9 @@ export function App() {
                     Refresh
                   </button>
                 </div>
-                {memoryView ? (
+                {!currentSessionActive ? (
+                  <p className="muted">Chat with lulu in this session to load memory.</p>
+                ) : memoryView ? (
                   <>
                     <small>{memoryView.path}</small>
                     <pre className="knowledge-content">{memoryView.content || "[empty]"}</pre>
@@ -1234,7 +1489,9 @@ export function App() {
                     Refresh
                   </button>
                 </div>
-                {skillList ? (
+                {!currentSessionActive ? (
+                  <p className="muted">Chat with lulu in this session to load skills.</p>
+                ) : skillList ? (
                   <>
                     <small>{skillList.root}</small>
                     <div className="skill-browser">
@@ -1279,7 +1536,9 @@ export function App() {
                     Refresh
                   </button>
                 </div>
-                {mcpTools ? (
+                {!currentSessionActive ? (
+                  <p className="muted">Chat with lulu in this session to load mcp tools.</p>
+                ) : mcpTools ? (
                   mcpTools.servers.length > 0 ? (
                     <div className="mcp-browser">
                       {mcpTools.servers.map((server) => (

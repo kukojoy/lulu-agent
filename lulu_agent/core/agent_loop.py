@@ -78,8 +78,10 @@ class AgentLoop:
         self.max_turns = max_turns
         self.messages = self._load_or_initialize_messages()
         self.current_turn: TurnRuntime | None = None
+        self._interrupt_requested = threading.Event()
 
     def run(self, user_input: str) -> str:
+        self._interrupt_requested.clear()
         self.current_turn = TurnRuntime(turn_id=new_turn_id())
 
         # === event emit ===
@@ -98,8 +100,10 @@ class AgentLoop:
         self._append_user_message(user_input)
 
         try:
+            self._interrupt_checkpoint()
             self._compress_context()
             for _ in range(self.max_turns):
+                self._interrupt_checkpoint()
                 request_messages = self.context_manager.prepare_messages(
                     self.messages,
                     context_blocks=[self._runtime_environment_context_block()],
@@ -122,6 +126,7 @@ class AgentLoop:
                 # === event emit and turn state update ===
 
                 message, streamed, usage = self._request_assistant_message(request_messages, tool_schemas)
+                self._interrupt_checkpoint()
                 tool_calls = message.tool_calls or []
                 
                 self._append_assistant_message(message)
@@ -151,8 +156,10 @@ class AgentLoop:
                     return result.final_response
                     
                 for tool_call in tool_calls:
+                    self._interrupt_checkpoint()
                     tool_message, tool_result = self._handle_tool_call(tool_call)
                     self._append_tool_message(tool_message)
+                    self._interrupt_checkpoint()
                     if not tool_result.ok and tool_result.error_type == ERROR_APPROVAL_DENIED:
                         self.current_turn.interrupt(
                             APPROVAL_DENIED_MESSAGE,
@@ -240,6 +247,7 @@ class AgentLoop:
         turn = self._active_turn()
 
         def on_delta(content_delta: str) -> None:
+            self._interrupt_checkpoint()
             turn.start_streaming()
             self._emit(
                 EVENT_ASSISTANT_DELTA,
@@ -257,6 +265,16 @@ class AgentLoop:
             on_delta=on_delta,
         )
         return response.message, response.streamed, response.usage
+
+    def request_interrupt(self) -> bool:
+        if self.current_turn is None:
+            return False
+        self._interrupt_requested.set()
+        return True
+
+    def _interrupt_checkpoint(self) -> None:
+        if self._interrupt_requested.is_set():
+            raise KeyboardInterrupt
 
     # === 消息加载/存储 ===
     def _load_or_initialize_messages(self) -> list[dict]:
@@ -394,6 +412,7 @@ class AgentLoop:
                 tool_calls=turn.tool_calls,
             ),
         )
+        self._interrupt_requested.clear()
         self.current_turn = None
         return turn_record
 

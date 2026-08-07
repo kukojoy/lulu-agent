@@ -68,6 +68,7 @@ button {
   flex-direction: column;
   min-height: 0;
   border-width: 0 0 0 1px;
+  container-type: inline-size;
 }
 
 .inspector-resizer {
@@ -646,22 +647,62 @@ h2 {
 
 .composer {
   flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
-  gap: 10px;
   padding: 14px 20px 18px;
   border-top: 1px solid #e0e5ec;
   background: #f8fafc;
 }
 
-.model-config-toggle {
-  grid-column: 1 / -1;
+.composer-box {
   display: grid;
-  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 52px;
+  grid-template-rows: auto auto;
+  row-gap: 14px;
+  column-gap: 12px;
+  align-items: end;
+  min-height: 150px;
+  border: 1px solid #d9dee7;
+  border-radius: 24px;
+  padding: 18px 18px 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgb(35 45 58 / 10%);
+}
+
+.composer-meta {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer .notice-tooltip {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 9px);
+  left: 0;
+}
+
+.composer .notice-tooltip::before {
+  top: 100%;
+  right: auto;
+  bottom: auto;
+  left: 5px;
+  border-top: 6px solid #d8b45f;
+  border-right: 6px solid transparent;
+  border-bottom: 0;
+  border-left: 6px solid transparent;
+}
+
+.model-config-pill {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   width: fit-content;
-  max-width: 100%;
+  max-width: min(58%, 520px);
   min-height: 28px;
   border: 1px solid #d8e0ea;
   border-radius: 999px;
@@ -672,63 +713,61 @@ h2 {
   text-align: left;
 }
 
-.model-config-toggle span,
-.model-config-toggle small {
+.model-config-pill span,
+.model-config-pill small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-config-toggle span {
+.model-config-pill span {
   font-weight: 800;
 }
 
-.model-config-toggle small {
+.model-config-pill small {
   color: #697486;
 }
 
-.model-config-detail {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-  margin-top: -2px;
-}
+@media (max-width: 760px) {
+  .composer-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
 
-.model-config-detail span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  border: 1px solid #d8e0ea;
-  border-radius: 7px;
-  padding: 4px 8px;
-  background: #ffffff;
-  color: #344255;
-  font-size: 12px;
-}
-
-.model-config-detail strong {
-  color: #697486;
-  font-size: 11px;
-  text-transform: uppercase;
+  .model-config-pill {
+    max-width: 100%;
+  }
 }
 
 .composer textarea {
+  grid-column: 1 / -1;
+  grid-row: 1;
   width: 100%;
-  max-height: 160px;
-  resize: vertical;
-  border: 1px solid #cfd6e1;
-  border-radius: 8px;
-  padding: 10px 12px;
+  min-height: 86px;
+  max-height: 260px;
+  resize: none;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0 4px;
+  background: transparent;
   color: #1c2430;
+  font-size: 16px;
+  line-height: 1.45;
+  outline: none;
+}
+
+.composer textarea::placeholder {
+  color: #9aa3af;
 }
 
 .send-button {
-  height: 42px;
-  border-radius: 8px;
+  grid-column: 2;
+  grid-row: 2;
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
   background: #24364b;
   color: #ffffff;
 }
@@ -748,6 +787,7 @@ h2 {
 .section-title {
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
   margin-bottom: 12px;
   font-size: 13px;
   font-weight: 800;
@@ -757,7 +797,15 @@ h2 {
 
 .inspector-tabs {
   display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   gap: 6px;
+  scrollbar-width: thin;
+}
+
+.section-title > .icon-button {
+  flex: 0 0 auto;
 }
 
 .inspector-tab,
@@ -770,6 +818,7 @@ h2 {
 
 .inspector-tab {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 6px;
@@ -785,6 +834,17 @@ h2 {
   border-color: #1b6fb8;
   background: #eaf4ff;
   color: #1b5d9b;
+}
+
+@container (max-width: 420px) {
+  .inspector-tab {
+    width: 34px;
+    padding: 0;
+  }
+
+  .inspector-tab span {
+    display: none;
+  }
 }
 
 .text-button {

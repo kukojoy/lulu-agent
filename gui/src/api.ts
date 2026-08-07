@@ -103,9 +103,13 @@ export async function readSkill(name: string): Promise<SkillDocument> {
   return data.skill;
 }
 
-export async function getTraceTimeline(sessionId: string): Promise<TraceTimelineItem[]> {
+export async function getTraceTimeline(
+  sessionId: string,
+  turnId?: string | null,
+): Promise<TraceTimelineItem[]> {
+  const query = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
   const data = await requestJson<{ timeline: TraceTimelineItem[] }>(
-    `/sessions/${sessionId}/trace`,
+    `/sessions/${sessionId}/trace${query}`,
   );
   return data.timeline;
 }
