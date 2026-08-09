@@ -14,6 +14,8 @@ from lulu_agent.interaction import (
     TraceInteractionService,
 )
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.llm import providers as model_providers
+from lulu_agent.llm.response import LLMClientConfig
 from lulu_agent.safety.approval import ApprovalProvider, ApprovalRequest, use_approval_provider
 from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
 from lulu_agent.runtime.events import EVENT_APPROVAL_REQUEST, EventPayloadBuilder, RuntimeEvent
@@ -124,13 +126,23 @@ class ServerRunner:
         self._agents: dict[str, AgentLoop] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._approval_providers: dict[str, ServerApprovalProvider] = {}
+        self._session_model_configs: dict[str, LLMClientConfig] = {}
         self._lock = threading.Lock()
 
     def create_session(self) -> dict[str, Any]:
         return self.session_service.create_session(cwd=Path.cwd())
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
-        return self.session_service.list_sessions(limit=limit)
+        sessions = self.session_service.list_sessions(limit=limit)
+        with self._lock:
+            active_session_ids = set(self._agents)
+        return [
+            {
+                **session,
+                "active": session.get("session_id") in active_session_ids,
+            }
+            for session in sessions
+        ]
 
     def resume_session(self, session_id: str) -> str:
         return self.session_service.resume_session(session_id)
@@ -165,7 +177,45 @@ class ServerRunner:
         }
 
     def get_model_config(self) -> dict[str, Any]:
-        return asdict(LLMClient(config).get_model_config())
+        return LLMClient(model_providers.build_model_config()).get_model_config().to_dict()
+
+    def get_session_model_config(self, session_id: str) -> dict[str, Any]:
+        self.session_service.resume_session(session_id)
+        with self._lock:
+            agent = self._agents.get(session_id)
+            pending_config = self._session_model_configs.get(session_id)
+        if agent is None:
+            if pending_config is not None:
+                return LLMClient(pending_config).get_model_config().to_dict()
+            return self.get_model_config()
+        return agent.llm_client.get_model_config().to_dict()
+
+    def list_model_providers(self) -> list[dict[str, Any]]:
+        return [provider.to_dict() for provider in model_providers.list_model_providers()]
+
+    def list_provider_models(self, provider: str) -> dict[str, Any]:
+        return model_providers.discover_provider_models(provider).to_dict()
+
+    def update_session_model(self, session_id: str, provider: str, model: str) -> dict[str, Any]:
+        self.session_service.resume_session(session_id)
+        lock = self._lock_for_session(session_id)
+        if not lock.acquire(blocking=False):
+            raise ServerRunnerError("session is already running.", code="session_running")
+        try:
+            with self._lock:
+                agent = self._agents.get(session_id)
+            next_config = model_providers.build_model_config(provider, model)
+            if agent is None:
+                with self._lock:
+                    self._session_model_configs[session_id] = next_config
+                return LLMClient(next_config).get_model_config().to_dict()
+            llm_client = LLMClient(next_config)
+            agent.set_llm_client(llm_client)
+            with self._lock:
+                self._session_model_configs[session_id] = next_config
+            return llm_client.get_model_config().to_dict()
+        finally:
+            lock.release()
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
         metadata = self.session_service.delete_session(session_id)
@@ -173,6 +223,7 @@ class ServerRunner:
             self._agents.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._approval_providers.pop(session_id, None)
+            self._session_model_configs.pop(session_id, None)
         return metadata
 
     def subscribe_events(self, session_id: str) -> queue.Queue[dict[str, Any]]:
@@ -220,6 +271,20 @@ class ServerRunner:
             return {"servers": []}
         return agent.tool_registry.list_mcp_tools()
 
+    def reload_mcp_tools(self, session_id: str) -> dict[str, Any]:
+        self.session_service.resume_session(session_id)
+        lock = self._lock_for_session(session_id)
+        if not lock.acquire(blocking=False):
+            raise ServerRunnerError("session is already running.", code="session_running")
+        try:
+            with self._lock:
+                agent = self._agents.get(session_id)
+            if agent is None:
+                raise ServerRunnerError("session agent is not loaded.", code="session_not_active")
+            return agent.reload_mcp_tools()
+        finally:
+            lock.release()
+
     def run_message(self, session_id: str, content: str) -> dict[str, Any]:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("message content must be a non-empty string.")
@@ -258,10 +323,13 @@ class ServerRunner:
         with self._lock:
             agent = self._agents.get(session_id)
             if agent is None:
+                model_config = self._session_model_configs.get(session_id)
+                if model_config is None:
+                    model_config = model_providers.build_model_config()
                 agent = AgentLoop(
                     session_store=self.session_store,
                     session_id=session_id,
-                    llm_client=LLMClient(config),
+                    llm_client=LLMClient(model_config),
                     event_sink=CompositeEventSink(
                         [
                             HubEventSink(self.event_hub, session_id),

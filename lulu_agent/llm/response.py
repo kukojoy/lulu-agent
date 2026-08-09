@@ -1,16 +1,29 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from lulu_agent.llm.usage import extract_usage
 
 
 @dataclass(frozen=True)
-class ModelConfig:
+class LLMClientConfig:
+    provider: str
     model: str
-    base_url_host: str
+    base_url: str = field(repr=False)
+    api_key: str = field(repr=False)
     timeout_seconds: float
+    max_retries: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url_host": _base_url_host(self.base_url),
+            "timeout_seconds": self.timeout_seconds,
+            "max_retries": self.max_retries,
+        }
 
 
 @dataclass(frozen=True)
@@ -123,3 +136,12 @@ class StreamingAssistantResponseBuilder:
                 )
             )
         return tool_calls
+
+
+def _base_url_host(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    if parsed.hostname:
+        return parsed.hostname
+    if parsed.path:
+        return parsed.path.split("/", 1)[0]
+    return ""

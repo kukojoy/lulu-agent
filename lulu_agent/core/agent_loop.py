@@ -1,17 +1,19 @@
 import os
+import time
 import threading
 
 from datetime import datetime
 
-from lulu_agent.config import config
 from lulu_agent.context.compressor import compress_turns
 from lulu_agent.context.manager import ContextManager
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.llm.providers import build_model_config
 from lulu_agent.llm.response import ModelRequest
 from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_DELTA,
     EVENT_ASSISTANT_MESSAGE,
     EVENT_MODEL_REQUEST,
+    EVENT_MODEL_RETRY,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_TURN_END,
@@ -60,7 +62,7 @@ class AgentLoop:
         skill_reviewer=None,  # lulu_agent.skills.review.SkillReviewer (NOTE: 此注释是为了防止循环 import)
         max_turns: int = 30,
     ):
-        self.llm_client = llm_client or LLMClient(config)
+        self.llm_client = llm_client or LLMClient(build_model_config())
         self.tool_registry = tool_registry or create_tool_registry()
         self.tool_runtime = ToolRuntime(self.tool_registry)
         self.session_store = session_store
@@ -123,6 +125,7 @@ class AgentLoop:
                         tools=tool_schemas,
                     ),
                 )
+                time.sleep(1.0)
                 # === event emit and turn state update ===
 
                 message, streamed, usage = self._request_assistant_message(request_messages, tool_schemas)
@@ -255,6 +258,20 @@ class AgentLoop:
                 EventPayloadBuilder.build_assistant_delta_payload(content_delta),
             )
 
+        def on_retry(retry: dict) -> None:
+            self._interrupt_checkpoint()
+            self._emit(
+                EVENT_MODEL_RETRY,
+                turn.turn_id,
+                EventPayloadBuilder.build_model_retry_payload(
+                    attempt=retry["attempt"],
+                    max_retries=retry["max_retries"],
+                    delay_seconds=retry["delay_seconds"],
+                    error_type=retry["error_type"],
+                    error_message=retry["error_message"],
+                ),
+            )
+
         stream = True
         response = self.llm_client.complete(
             ModelRequest(
@@ -263,6 +280,7 @@ class AgentLoop:
                 stream=stream,
             ),
             on_delta=on_delta,
+            on_retry=on_retry,
         )
         return response.message, response.streamed, response.usage
 
@@ -271,6 +289,38 @@ class AgentLoop:
             return False
         self._interrupt_requested.set()
         return True
+
+    def set_llm_client(self, llm_client: LLMClient) -> None:
+        self.llm_client = llm_client
+
+    def reload_mcp_tools(self) -> dict:
+        from lulu_agent.mcp.registry import register_mcp_tools
+
+        self.tool_registry.clear_mcp_tools()
+        try:
+            result = register_mcp_tools(self.tool_registry)
+            for issue in result.issues:
+                source = f"mcp:{issue.server}" if issue.server else "mcp"
+                self.tool_registry.add_issue(source, issue.issue_message)
+            return {
+                "registered": result.registered,
+                "issues": [
+                    {
+                        "server": issue.server,
+                        "issue_message": issue.issue_message,
+                    }
+                    for issue in result.issues
+                ],
+                "tools": self.tool_registry.list_mcp_tools(),
+            }
+        except Exception as exc:
+            issue_message = str(exc) or exc.__class__.__name__
+            self.tool_registry.add_issue("mcp", issue_message)
+            return {
+                "registered": [],
+                "issues": [{"server": "", "issue_message": issue_message}],
+                "tools": self.tool_registry.list_mcp_tools(),
+            }
 
     def _interrupt_checkpoint(self) -> None:
         if self._interrupt_requested.is_set():

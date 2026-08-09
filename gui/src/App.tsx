@@ -27,15 +27,20 @@ import {
   getMemory,
   getModelConfig,
   getRuntimeState,
+  getSessionModelConfig,
   getTaskState,
   getTraceTimeline,
+  listModelProviders,
   listMcpTools,
+  listProviderModels,
   inspectSession,
   listSkills,
   listSessions,
   loadMessages,
   openRunSocket,
   readSkill,
+  reloadMcpTools,
+  updateSessionModel,
 } from "./api";
 import type {
   ApprovalRequestView,
@@ -43,6 +48,8 @@ import type {
   MemoryView,
   McpToolsView,
   ModelConfigView,
+  ModelProviderView,
+  ProviderModelsView,
   RuntimeState,
   SkillDocument,
   SkillListView,
@@ -131,6 +138,7 @@ function runtimeStateFromPayload(value: unknown): RuntimeState | null {
     active_turn_id:
       typeof candidate.active_turn_id === "string" ? candidate.active_turn_id : null,
     status: typeof candidate.status === "string" ? candidate.status : null,
+    status_detail: typeof candidate.status_detail === "string" ? candidate.status_detail : null,
     pending_approval:
       candidate.pending_approval && typeof candidate.pending_approval === "object"
         ? approvalRequestFromPayload(candidate.pending_approval as Record<string, unknown>)
@@ -179,6 +187,29 @@ function formatServerError(payload: Record<string, unknown>): string {
     return "There is no running turn to interrupt.";
   }
   return message;
+}
+
+function modelProviderReady(provider: ModelProviderView | undefined): boolean {
+  return Boolean(provider?.base_url_configured && provider.api_key_configured);
+}
+
+function modelProviderMissingFields(provider: ModelProviderView | undefined): string {
+  if (!provider) {
+    return "provider configuration";
+  }
+  const missing = [];
+  if (!provider.base_url_configured) {
+    missing.push("base URL");
+  }
+  if (!provider.api_key_configured) {
+    missing.push("API key");
+  }
+  return missing.join(" and ");
+}
+
+function modelProviderMissingLabel(provider: ModelProviderView): string {
+  const missing = modelProviderMissingFields(provider);
+  return missing ? `Missing ${missing}` : provider.base_url_host;
 }
 
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
@@ -446,8 +477,19 @@ export function App() {
   const [taskState, setTaskState] = useState<TaskState | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
   const [modelConfig, setModelConfig] = useState<ModelConfigView | null>(null);
+  const [modelProviders, setModelProviders] = useState<ModelProviderView[]>([]);
+  const [selectedModelProvider, setSelectedModelProvider] = useState("");
+  const [providerListOpen, setProviderListOpen] = useState(false);
+  const [providerModels, setProviderModels] = useState<ProviderModelsView | null>(null);
+  const [modelDraft, setModelDraft] = useState("");
+  const [modelListOpen, setModelListOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
+  const [modelListLoading, setModelListLoading] = useState(false);
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  const [modelSwitchingSessionId, setModelSwitchingSessionId] = useState("");
   const [memoryView, setMemoryView] = useState<MemoryView | null>(null);
   const [mcpTools, setMcpTools] = useState<McpToolsView | null>(null);
+  const [mcpReloadingSessionId, setMcpReloadingSessionId] = useState("");
   const [skillList, setSkillList] = useState<SkillListView | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<SkillDocument | null>(null);
   const [liveToolItems, setLiveToolItems] = useState<ChatItem[]>([]);
@@ -466,12 +508,15 @@ export function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const modelConfigButtonRef = useRef<HTMLButtonElement | null>(null);
   const pendingFirstMessageRef = useRef<{ sessionId: string; content: string } | null>(null);
   const runningSessionIdRef = useRef("");
   const pendingSentMessageRef = useRef("");
   const pendingToolReasoningRef = useRef("");
+  const lastRuntimeErrorRef = useRef<{ sessionId: string; message: string } | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const inspectorResizeRef = useRef({ startX: 0, startWidth: 0 });
+  const [modelPanelStyle, setModelPanelStyle] = useState<CSSProperties>({});
 
   const applyRuntimeState = useCallback((nextRuntimeState: RuntimeState) => {
     setRuntimeState(nextRuntimeState);
@@ -505,6 +550,60 @@ export function App() {
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
     setSessions(nextSessions);
+  }, []);
+
+  const refreshModelRuntime = useCallback(async () => {
+    const [configResult, providersResult] = await Promise.allSettled([
+      getModelConfig(),
+      listModelProviders(),
+    ]);
+    const nextProviders =
+      providersResult.status === "fulfilled" ? providersResult.value : [];
+    const nextConfig =
+      configResult.status === "fulfilled" ? configResult.value : null;
+
+    if (nextProviders.length) {
+      setModelProviders(nextProviders);
+    }
+    if (nextConfig) {
+      setModelConfig(nextConfig);
+      setSelectedModelProvider(nextConfig.provider);
+      setModelDraft(nextConfig.model);
+      return;
+    }
+
+    const fallbackProvider =
+      nextProviders.find((provider) => modelProviderReady(provider)) ?? nextProviders[0];
+    if (fallbackProvider) {
+      let fallbackModel = fallbackProvider.default_model || "";
+      if (!fallbackModel && modelProviderReady(fallbackProvider)) {
+        try {
+          const discovered = await listProviderModels(fallbackProvider.name);
+          fallbackModel = discovered.models[0] || "";
+          setProviderModels(discovered);
+        } catch {
+          fallbackModel = "";
+        }
+      }
+      setSelectedModelProvider(fallbackProvider.name);
+      setModelDraft(fallbackModel);
+      setModelConfig((current) => {
+        if (current?.provider || current?.model) {
+          return current;
+        }
+        return {
+          provider: fallbackProvider.name,
+          model: fallbackModel,
+          base_url_host: fallbackProvider.base_url_host,
+          timeout_seconds: current?.timeout_seconds ?? 60,
+          max_retries: current?.max_retries ?? 0,
+        };
+      });
+    }
+
+    if (configResult.status === "rejected" && providersResult.status === "rejected") {
+      throw configResult.reason;
+    }
   }, []);
 
   const restoreStreamingMessageFromTrace = useCallback(
@@ -541,16 +640,27 @@ export function App() {
 
   const refreshSession = useCallback(
     async (sessionId: string) => {
-      const [nextInspection, nextMessages, nextTaskState, nextRuntimeState] = await Promise.all([
+      const [
+        nextInspection,
+        nextMessages,
+        nextTaskState,
+        nextRuntimeState,
+      ] = await Promise.all([
         inspectSession(sessionId),
         loadMessages(sessionId),
         getTaskState(sessionId),
         getRuntimeState(sessionId),
       ]);
+      const nextModelConfig = await getSessionModelConfig(sessionId).catch(() => null);
       setInspection(nextInspection);
       setMessages(nextMessages);
       setTaskState(nextTaskState);
       applyRuntimeState(nextRuntimeState);
+      if (nextModelConfig) {
+        setModelConfig(nextModelConfig);
+      } else {
+        await refreshModelRuntime();
+      }
       if (!nextRuntimeState.active) {
         setMemoryView(null);
         setSkillList(null);
@@ -561,7 +671,7 @@ export function App() {
         await restoreStreamingMessageFromTrace(sessionId, nextRuntimeState.active_turn_id);
       }
     },
-    [applyRuntimeState, restoreStreamingMessageFromTrace],
+    [applyRuntimeState, refreshModelRuntime, restoreStreamingMessageFromTrace],
   );
 
   const refreshActiveSession = useCallback(async () => {
@@ -609,6 +719,126 @@ export function App() {
     setMcpTools(await listMcpTools(activeSessionId));
   }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
+  const refreshProviderModels = useCallback(async (provider: string, fallbackModel = "") => {
+    if (!provider) {
+      setProviderModels(null);
+      return;
+    }
+    setModelListLoading(true);
+    try {
+      const latestProviders = await listModelProviders();
+      setModelProviders(latestProviders);
+      const latestProvider = latestProviders.find((item) => item.name === provider);
+      const nextFallbackModel = latestProvider?.default_model || fallbackModel;
+      if (!modelProviderReady(latestProvider)) {
+        setProviderModels({
+          provider,
+          models: nextFallbackModel ? [nextFallbackModel] : [],
+          discovered: false,
+          error: `Model provider '${provider}' requires ${modelProviderMissingFields(latestProvider)}.`,
+        });
+        return;
+      }
+      const result = await listProviderModels(provider);
+      setProviderModels(result);
+      const nextModel = result.models[0] || nextFallbackModel;
+      if (nextModel) {
+        setModelDraft((current) => (current.trim() ? current : nextModel));
+      }
+    } finally {
+      setModelListLoading(false);
+    }
+  }, []);
+
+  const updateModelPanelPosition = useCallback(() => {
+    const button = modelConfigButtonRef.current;
+    if (!button) {
+      return;
+    }
+    const rect = button.getBoundingClientRect();
+    const mainPanel = document.querySelector(".main-panel")?.getBoundingClientRect();
+    const minLeft = (mainPanel?.left ?? 0) + 16;
+    const maxRight = (mainPanel?.right ?? window.innerWidth) - 16;
+    const availableWidth = Math.max(260, maxRight - minLeft);
+    const panelWidth = Math.min(320, availableWidth);
+    const left = Math.max(minLeft, Math.min(rect.right - panelWidth, maxRight - panelWidth));
+    const bottom = Math.max(16, window.innerHeight - rect.top + 10);
+    setModelPanelStyle({
+      width: panelWidth,
+      left,
+      bottom,
+    });
+  }, []);
+
+  const applyModelSelection = useCallback(async () => {
+    if (!selectedModelProvider || !modelDraft.trim()) {
+      return;
+    }
+    const latestProviders = await listModelProviders();
+    setModelProviders(latestProviders);
+    const provider = latestProviders.find((item) => item.name === selectedModelProvider);
+    if (!modelProviderReady(provider)) {
+      setError(`Model provider '${selectedModelProvider}' requires ${modelProviderMissingFields(provider)}.`);
+      setProviderModels({
+        provider: selectedModelProvider,
+        models: provider?.default_model ? [provider.default_model] : [],
+        discovered: false,
+        error: `Model provider '${selectedModelProvider}' requires ${modelProviderMissingFields(provider)}.`,
+      });
+      return;
+    }
+    if (!activeSessionId) {
+      setModelConfig({
+        provider: selectedModelProvider,
+        model: modelDraft.trim(),
+        base_url_host: provider?.base_url_host ?? "",
+        timeout_seconds: modelConfig?.timeout_seconds ?? 60,
+        max_retries: modelConfig?.max_retries ?? 0,
+      });
+      setModelPanelOpen(false);
+      return;
+    }
+    const sessionId = activeSessionId;
+    setModelSwitchingSessionId(sessionId);
+    try {
+      setModelConfig(await updateSessionModel(sessionId, selectedModelProvider, modelDraft.trim()));
+      applyRuntimeState(await getRuntimeState(sessionId));
+      setModelPanelOpen(false);
+    } catch (nextError) {
+      const latestProviders = await listModelProviders().catch(() => null);
+      if (latestProviders) {
+        setModelProviders(latestProviders);
+      }
+      throw nextError;
+    } finally {
+      setModelSwitchingSessionId((current) => (current === sessionId ? "" : current));
+    }
+  }, [activeSessionId, applyRuntimeState, modelConfig?.max_retries, modelConfig?.timeout_seconds, modelDraft, selectedModelProvider]);
+
+  const reloadMcpToolsForActiveSession = useCallback(async () => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setMcpTools(null);
+      return;
+    }
+    const sessionId = activeSessionId;
+    setMcpReloadingSessionId(sessionId);
+    setMcpTools(null);
+    try {
+      const result = await reloadMcpTools(sessionId);
+      setMcpTools(result.tools);
+      applyRuntimeState(await getRuntimeState(sessionId));
+      refreshSessions().catch((nextError) => setError(String(nextError)));
+    } finally {
+      setMcpReloadingSessionId((current) => (current === sessionId ? "" : current));
+    }
+  }, [
+    activeSessionId,
+    applyRuntimeState,
+    refreshSessions,
+    runtimeState?.active,
+    runtimeState?.session_id,
+  ]);
+
   const loadSkill = useCallback(async (name: string) => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       return;
@@ -639,11 +869,20 @@ export function App() {
     setStreamingMessage((current) => `${current}${delta}`);
   }, []);
 
+  const markSessionActive = useCallback((sessionId: string) => {
+    setSessions((current) =>
+      current.map((session) =>
+        session.session_id === sessionId ? { ...session, active: true } : session,
+      ),
+    );
+  }, []);
+
   const setLiveRuntimeStatus = useCallback(
-    (status: string, turnId: string | null = null) => {
+    (status: string, turnId: string | null = null, statusDetail: string | null = null) => {
       if (!activeSessionId) {
         return;
       }
+      markSessionActive(activeSessionId);
       runningSessionIdRef.current = activeSessionId;
       setBusy(true);
       setRuntimeState((current) => ({
@@ -653,11 +892,12 @@ export function App() {
         connected: true,
         active_turn_id: turnId ?? (current?.session_id === activeSessionId ? current.active_turn_id ?? null : null),
         status,
+        status_detail: statusDetail,
         pending_approval: current?.session_id === activeSessionId ? current.pending_approval ?? null : null,
         notices: current?.session_id === activeSessionId ? current.notices : [],
       }));
     },
-    [activeSessionId],
+    [activeSessionId, markSessionActive],
   );
 
   const runSessionMessage = useCallback(
@@ -678,6 +918,7 @@ export function App() {
         connected: true,
         active_turn_id: current?.session_id === sessionId ? current.active_turn_id ?? null : null,
         status: current?.session_id === sessionId ? current.status ?? null : null,
+        status_detail: current?.session_id === sessionId ? current.status_detail ?? null : null,
         pending_approval: null,
         notices: current?.session_id === sessionId ? current.notices : [],
       }));
@@ -691,10 +932,47 @@ export function App() {
   }, [refreshSessions]);
 
   useEffect(() => {
-    getModelConfig()
-      .then(setModelConfig)
-      .catch((nextError) => setError(String(nextError)));
-  }, []);
+    refreshModelRuntime().catch((nextError) => setError(String(nextError)));
+  }, [refreshModelRuntime]);
+
+  useEffect(() => {
+    if (!modelPanelOpen || !selectedModelProvider) {
+      return;
+    }
+    updateModelPanelPosition();
+    refreshProviderModels(selectedModelProvider).catch((nextError) => setError(String(nextError)));
+  }, [modelPanelOpen, refreshProviderModels, selectedModelProvider, updateModelPanelPosition]);
+
+  useEffect(() => {
+    if (!modelPanelOpen) {
+      return;
+    }
+    updateModelPanelPosition();
+  }, [inspectorWidth, modelPanelOpen, sessionsOpen, taskOpen, updateModelPanelPosition]);
+
+  useEffect(() => {
+    if (!modelPanelOpen) {
+      return;
+    }
+    window.addEventListener("resize", updateModelPanelPosition);
+    window.addEventListener("scroll", updateModelPanelPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateModelPanelPosition);
+      window.removeEventListener("scroll", updateModelPanelPosition, true);
+    };
+  }, [modelPanelOpen, updateModelPanelPosition]);
+
+  useEffect(() => {
+    if (!modelPanelOpen && modelConfig?.model) {
+      setModelDraft(modelConfig.model);
+      if (modelConfig.provider) {
+        setSelectedModelProvider(modelConfig.provider);
+      }
+      setProviderListOpen(false);
+      setModelListOpen(false);
+      setModelSearch("");
+    }
+  }, [modelConfig?.model, modelConfig?.provider, modelPanelOpen]);
 
   useEffect(() => {
     refreshActiveSession().catch((nextError) => setError(String(nextError)));
@@ -762,6 +1040,9 @@ export function App() {
           const nextRuntimeState = runtimeStateFromPayload(event.payload.runtime);
           if (nextRuntimeState) {
             applyRuntimeState(nextRuntimeState);
+            if (nextRuntimeState.active) {
+              markSessionActive(nextRuntimeState.session_id);
+            }
             if (nextRuntimeState.running && nextRuntimeState.status === "streaming_assistant") {
               restoreStreamingMessageFromTrace(
                 nextRuntimeState.session_id,
@@ -785,7 +1066,14 @@ export function App() {
           if (code === "session_running" && pendingSentMessageRef.current) {
             setDraft(pendingSentMessageRef.current);
           }
-          setError(formatServerError(event.payload));
+          const message = String(event.payload.message ?? "Event stream error");
+          const duplicatesRuntimeError =
+            code === "unexpected_error" &&
+            lastRuntimeErrorRef.current?.sessionId === activeSessionId &&
+            lastRuntimeErrorRef.current.message === message;
+          if (!duplicatesRuntimeError) {
+            setError(formatServerError(event.payload));
+          }
           pendingFirstMessageRef.current = null;
           runningSessionIdRef.current = "";
           pendingSentMessageRef.current = "";
@@ -806,6 +1094,16 @@ export function App() {
         }
         if (event.type === "model_request") {
           setLiveRuntimeStatus("requesting_model", event.turn_id || null);
+          return;
+        }
+        if (event.type === "model_retry") {
+          const attempt = Number(event.payload.attempt ?? 0);
+          const maxRetries = Number(event.payload.max_retries ?? 0);
+          const detail =
+            attempt > 0 && maxRetries > 0
+              ? `Reconnecting... ${attempt}/${maxRetries}`
+              : "Reconnecting...";
+          setLiveRuntimeStatus("model_retrying", event.turn_id || null, detail);
           return;
         }
         if (event.type === "assistant_delta") {
@@ -850,6 +1148,10 @@ export function App() {
         if (event.type === "turn_end") {
           const turnError = event.payload.error;
           if (turnError) {
+            lastRuntimeErrorRef.current = {
+              sessionId: activeSessionId,
+              message: String(turnError),
+            };
             setLiveToolItems((current) => [
               ...current,
               {
@@ -877,6 +1179,7 @@ export function App() {
                   connected: true,
                   active_turn_id: null,
                   status: null,
+                  status_detail: null,
                   pending_approval: null,
                   notices: current?.session_id === activeSessionId ? current.notices : [],
                 }));
@@ -959,6 +1262,7 @@ export function App() {
     appendStreamingDelta,
     applyRuntimeState,
     clearLiveTurnState,
+    markSessionActive,
     refreshActiveSession,
     refreshSessions,
     runSessionMessage,
@@ -987,10 +1291,31 @@ export function App() {
   const currentSessionActive = Boolean(
     activeSessionId && runtimeState?.session_id === activeSessionId && runtimeState.active,
   );
+  const currentSessionMcpReloading = Boolean(activeSessionId && mcpReloadingSessionId === activeSessionId);
+  const currentSessionModelSwitching = Boolean(activeSessionId && modelSwitchingSessionId === activeSessionId);
   const runtimeNotices =
     runtimeState?.session_id === activeSessionId ? runtimeState.notices ?? [] : [];
+  const selectedModelProviderView = modelProviders.find(
+    (provider) => provider.name === selectedModelProvider,
+  );
+  const additionalModelProviders = modelProviders.filter(
+    (provider) => provider.name !== selectedModelProvider,
+  );
+  const filteredProviderModels = useMemo(() => {
+    const discoveredModels = providerModels?.models ?? [];
+    const fallbackModel = selectedModelProviderView?.default_model || "";
+    const models = discoveredModels.length || !fallbackModel ? discoveredModels : [fallbackModel];
+    const query = modelSearch.trim().toLowerCase();
+    if (!query) {
+      return models;
+    }
+    return models.filter((model) => model.toLowerCase().includes(query));
+  }, [modelSearch, providerModels?.models, selectedModelProviderView?.default_model]);
   const composerDisabled =
-    currentSessionRunning || Boolean(activeSessionId && connectionStatus !== "ready");
+    currentSessionRunning ||
+    currentSessionMcpReloading ||
+    currentSessionModelSwitching ||
+    Boolean(activeSessionId && connectionStatus !== "ready");
   const statusLabel = !activeSessionId
     ? "Draft"
     : connectionStatus === "reconnecting"
@@ -1005,15 +1330,17 @@ export function App() {
             ? "Interrupting"
           : runtimeState?.status === "requesting_model"
             ? "Requesting model"
-            : runtimeState?.status === "streaming_assistant"
-              ? "Streaming"
-              : runtimeState?.status === "running_tool"
-                ? "Running tool"
-                : runtimeState?.status === "finalizing"
-                  ? "Finalizing"
-                  : currentSessionRunning
-                    ? "Running"
-                    : "Ready";
+            : runtimeState?.status === "model_retrying"
+              ? runtimeState.status_detail || "Reconnecting..."
+              : runtimeState?.status === "streaming_assistant"
+                ? "Streaming"
+                : runtimeState?.status === "running_tool"
+                  ? "Running tool"
+                  : runtimeState?.status === "finalizing"
+                    ? "Finalizing"
+                    : currentSessionRunning
+                      ? "Running"
+                      : "Ready";
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end" });
@@ -1071,15 +1398,26 @@ export function App() {
     if (!content || composerDisabled) {
       return;
     }
+    if (!activeSessionId && selectedModelProvider && modelDraft.trim()) {
+      const provider = modelProviders.find((item) => item.name === selectedModelProvider);
+      if (!modelProviderReady(provider)) {
+        setError(`Model provider '${selectedModelProvider}' requires ${modelProviderMissingFields(provider)}.`);
+        return;
+      }
+    }
     setDraft("");
     pendingSentMessageRef.current = content;
     setBusy(true);
     setError("");
+    lastRuntimeErrorRef.current = null;
     clearLiveTurnState();
     setMessages((current) => [...current, { role: "user", content }]);
     try {
       if (!activeSessionId) {
         const session = await createSession();
+        if (selectedModelProvider && modelDraft.trim()) {
+          await updateSessionModel(session.session_id, selectedModelProvider, modelDraft.trim());
+        }
         runningSessionIdRef.current = session.session_id;
         setRuntimeState({
           session_id: session.session_id,
@@ -1133,6 +1471,7 @@ export function App() {
       connected: true,
       active_turn_id: current?.session_id === activeSessionId ? current.active_turn_id ?? null : null,
       status: "interrupting",
+      status_detail: null,
       pending_approval: null,
       notices: current?.session_id === activeSessionId ? current.notices : [],
     }));
@@ -1201,7 +1540,10 @@ export function App() {
                     type="button"
                     onClick={() => setActiveSessionId(session.session_id)}
                   >
-                    <span>{session.title || "(untitled)"}</span>
+                    <span className="session-title">
+                      {session.active && <span className="session-active-dot" title="Agent loaded" />}
+                      <span>{session.title || "(untitled)"}</span>
+                    </span>
                     <small>{shortSessionId(session.session_id)}</small>
                   </button>
                   <button
@@ -1337,7 +1679,7 @@ export function App() {
               onKeyDown={handleComposerKeyDown}
               placeholder="Ask lulu-agent..."
               rows={2}
-              disabled={currentSessionRunning}
+              disabled={currentSessionRunning || currentSessionMcpReloading || currentSessionModelSwitching}
             />
             <div className="composer-meta">
               <div className="runtime-status">
@@ -1356,9 +1698,148 @@ export function App() {
                   {statusLabel}
                 </div>
               </div>
-              <div className="model-config-pill" title="Model configuration">
-                <span>{modelConfig?.model || "Model unavailable"}</span>
-                {modelConfig?.base_url_host && <small>{modelConfig.base_url_host}</small>}
+              <div className="model-config-control">
+                <button
+                  ref={modelConfigButtonRef}
+                  className={`model-config-pill ${modelConfig?.model ? "" : "unavailable"}`}
+                  type="button"
+                  title="Model configuration"
+                  onClick={() => {
+                    updateModelPanelPosition();
+                    setModelPanelOpen((current) => !current);
+                  }}
+                >
+                  <span>{modelConfig?.model || "Model unavailable"}</span>
+                  {modelConfig?.base_url_host && <small>{modelConfig.base_url_host}</small>}
+                </button>
+                {modelPanelOpen && (
+                  <div className="model-switch-panel" style={modelPanelStyle}>
+                    <div className="model-switch-field">
+                      <span>Provider</span>
+                      <button
+                        className="provider-selected-option"
+                        type="button"
+                        onClick={() => setProviderListOpen((current) => !current)}
+                      >
+                        <span>{selectedModelProviderView?.name || "No provider selected"}</span>
+                        <small>{selectedModelProviderView?.base_url_host || ""}</small>
+                        {providerListOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                      </button>
+                      {providerListOpen && (
+                        <div className="provider-list">
+                          {additionalModelProviders.length ? (
+                            additionalModelProviders.map((provider) => (
+                              <button
+                                className="provider-option"
+                                disabled={!modelProviderReady(provider)}
+                                key={provider.name}
+                                title={!modelProviderReady(provider) ? modelProviderMissingLabel(provider) : undefined}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedModelProvider(provider.name);
+                                  setProviderModels(null);
+                                  setModelDraft(provider.default_model || "");
+                                  setProviderListOpen(false);
+                                  setModelListOpen(false);
+                                  setModelSearch("");
+                                  refreshProviderModels(provider.name, provider.default_model).catch((nextError) =>
+                                    setError(String(nextError)),
+                                  );
+                                }}
+                              >
+                                <span>{provider.name}</span>
+                                <small>
+                                  {modelProviderMissingLabel(provider)}
+                                </small>
+                              </button>
+                            ))
+                          ) : (
+                            <small>No additional providers configured</small>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="model-switch-field">
+                      <span>Model</span>
+                      <button
+                        className="model-selected-option"
+                        disabled={modelListLoading || !modelProviderReady(selectedModelProviderView)}
+                        type="button"
+                        onClick={() => setModelListOpen((current) => !current)}
+                      >
+                        <span>{modelDraft || "No model selected"}</span>
+                        {modelListOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                      </button>
+                      {modelListOpen && (
+                        <>
+                          <input
+                            className="model-search-input"
+                            value={modelSearch}
+                            onChange={(event) => setModelSearch(event.target.value)}
+                            placeholder="Search models..."
+                          />
+                          <div className="model-option-list">
+                            {filteredProviderModels.length ? (
+                              filteredProviderModels.map((model) => (
+                                <button
+                                  className={`model-option ${model === modelDraft ? "active" : ""}`}
+                                  disabled={modelListLoading || !modelProviderReady(selectedModelProviderView)}
+                                  key={model}
+                                  type="button"
+                                  onClick={() => {
+                                    setModelDraft(model);
+                                    setModelListOpen(false);
+                                    setModelSearch("");
+                                  }}
+                                >
+                                  <span>{model}</span>
+                                </button>
+                              ))
+                            ) : (
+                              <small>
+                                {modelListLoading
+                                  ? "Loading models..."
+                                  : (providerModels?.models ?? []).length ||
+                                      selectedModelProviderView?.default_model
+                                    ? "No matching models"
+                                    : "No models discovered"}
+                              </small>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    {providerModels?.error && <small>{providerModels.error}</small>}
+                    <div className="model-switch-actions">
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() =>
+                          selectedModelProvider &&
+                          refreshProviderModels(selectedModelProvider, selectedModelProviderView?.default_model).catch((nextError) => setError(String(nextError)))
+                        }
+                      >
+                        Refresh
+                      </button>
+                      <button
+                        className="text-button"
+                        type="button"
+                        disabled={
+                          currentSessionRunning ||
+                          currentSessionMcpReloading ||
+                          currentSessionModelSwitching ||
+                          modelListLoading ||
+                          !selectedModelProvider ||
+                          !modelProviderReady(selectedModelProviderView) ||
+                          !modelDraft.trim()
+                        }
+                        onClick={() => applyModelSelection().catch((nextError) => setError(String(nextError)))}
+                      >
+                        {currentSessionModelSwitching ? "Applying" : "Apply"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             {currentSessionRunning ? (
@@ -1532,8 +2013,20 @@ export function App() {
               <div className="knowledge-block">
                 <div className="knowledge-header">
                   <strong>MCP</strong>
-                  <button className="text-button" type="button" onClick={() => void refreshMcpTools()}>
-                    Refresh
+                  <button
+                    className="text-button"
+                    type="button"
+                    disabled={
+                      !currentSessionActive ||
+                      currentSessionRunning ||
+                      currentSessionMcpReloading
+                    }
+                    onClick={() =>
+                      reloadMcpToolsForActiveSession().catch((nextError) => setError(String(nextError)))
+                    }
+                  >
+                    <RefreshCcw size={14} />
+                    {currentSessionMcpReloading ? "Reloading" : "Reload"}
                   </button>
                 </div>
                 {!currentSessionActive ? (

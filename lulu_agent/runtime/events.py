@@ -12,6 +12,7 @@ class RuntimeEventType(StrEnum):
     TURN_START = "turn_start"
     USER_MESSAGE = "user_message"
     MODEL_REQUEST = "model_request"
+    MODEL_RETRY = "model_retry"
     ASSISTANT_DELTA = "assistant_delta"
     ASSISTANT_MESSAGE = "assistant_message"
     APPROVAL_REQUEST = "approval_request"
@@ -23,6 +24,7 @@ class RuntimeEventType(StrEnum):
 EVENT_TURN_START = RuntimeEventType.TURN_START
 EVENT_USER_MESSAGE = RuntimeEventType.USER_MESSAGE
 EVENT_MODEL_REQUEST = RuntimeEventType.MODEL_REQUEST
+EVENT_MODEL_RETRY = RuntimeEventType.MODEL_RETRY
 EVENT_ASSISTANT_DELTA = RuntimeEventType.ASSISTANT_DELTA
 EVENT_ASSISTANT_MESSAGE = RuntimeEventType.ASSISTANT_MESSAGE
 EVENT_APPROVAL_REQUEST = RuntimeEventType.APPROVAL_REQUEST
@@ -81,6 +83,15 @@ class ModelRequestPayload:
 
 
 @dataclass(frozen=True)
+class ModelRetryPayload:
+    attempt: int
+    max_retries: int
+    delay_seconds: float
+    error_type: ErrorType
+    error_message: str
+
+
+@dataclass(frozen=True)
 class AssistantDeltaPayload:
     delta: str
 
@@ -135,6 +146,7 @@ RuntimeEventPayload = (
     TurnStartPayload
     | UserMessagePayload
     | ModelRequestPayload
+    | ModelRetryPayload
     | AssistantDeltaPayload
     | AssistantMessagePayload
     | ApprovalRequestPayload
@@ -148,6 +160,7 @@ EVENT_PAYLOAD_MODELS: dict[str, type[RuntimeEventPayload]] = {
     EVENT_TURN_START: TurnStartPayload,
     EVENT_USER_MESSAGE: UserMessagePayload,
     EVENT_MODEL_REQUEST: ModelRequestPayload,
+    EVENT_MODEL_RETRY: ModelRetryPayload,
     EVENT_ASSISTANT_DELTA: AssistantDeltaPayload,
     EVENT_ASSISTANT_MESSAGE: AssistantMessagePayload,
     EVENT_APPROVAL_REQUEST: ApprovalRequestPayload,
@@ -183,6 +196,24 @@ class EventPayloadBuilder:
                 tool_count=len(tools),
                 tool_names=_tool_names(tools),
                 total_message_chars=_total_message_chars(messages),
+            )
+        )
+
+    @staticmethod
+    def build_model_retry_payload(
+        attempt: int,
+        max_retries: int,
+        delay_seconds: float,
+        error_type: ErrorType,
+        error_message: str,
+    ) -> dict[str, Any]:
+        return payload_to_dict(
+            ModelRetryPayload(
+                attempt=attempt,
+                max_retries=max_retries,
+                delay_seconds=delay_seconds,
+                error_type=error_type,
+                error_message=error_message,
             )
         )
 

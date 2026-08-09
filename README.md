@@ -2,7 +2,7 @@
 
 `lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI 和 CLI 两种入口，可以在本机完成对话、调用工具、读写文件、执行命令、维护长期记忆和复用技能。
 
-当前状态：`v3.2 completed`。
+当前状态：`v3.6 in progress`。
 
 ## 主要能力
 
@@ -34,15 +34,27 @@ npm install
 
 ## 配置
 
-在仓库根目录创建 `.env`：
+模型配置保存在全局用户目录 `~/.lulu/models.json`。每个 provider 直接填写
+OpenAI-compatible 服务地址、API key 和默认模型；暂不使用的 provider 可以先留空
+`base_url` 或 `api_key`，GUI 会显示但禁止选择：
 
-```bash
-OPENAI_BASE_URL=
-OPENAI_API_KEY=
-OPENAI_MODEL=
+```json
+{
+  "default_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "your-api-key",
+      "default_model": "deepseek-chat"
+    }
+  }
+}
 ```
 
-模型服务需要兼容 OpenAI chat completion，并支持 tool calling。
+模型服务需要兼容 OpenAI chat completion，并支持 tool calling。如果
+`default_model` 留空，GUI 会尝试从 provider 的 `/models` 接口读取候选模型。
+`.env` 只用于非模型配置，例如 `TAVILY_API_KEY`、模型请求超时/重试次数和
+safety profile。
 
 如果需要 web search / web extract，配置：
 

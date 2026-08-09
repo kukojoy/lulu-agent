@@ -22,6 +22,11 @@ class MessageRequest(BaseModel):
     content: str
 
 
+class ModelSwitchRequest(BaseModel):
+    provider: str
+    model: str
+
+
 def create_app(runner: ServerRunner | None = None):
     try:
         from fastapi import FastAPI, HTTPException, Query, WebSocketDisconnect
@@ -112,12 +117,55 @@ def create_app(runner: ServerRunner | None = None):
         except ConfigError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.get("/sessions/{session_id}/model")
+    def get_session_model_config(session_id: str) -> dict[str, Any]:
+        try:
+            return {"model_config": runner.get_session_model_config(session_id)}
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/runtime/model/providers")
+    def list_model_providers() -> dict[str, Any]:
+        try:
+            return {"providers": runner.list_model_providers()}
+        except ConfigError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/runtime/model/providers/{provider}/models")
+    def list_provider_models(provider: str) -> dict[str, Any]:
+        try:
+            return runner.list_provider_models(provider)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/sessions/{session_id}/model")
+    def update_session_model(session_id: str, request: ModelSwitchRequest) -> dict[str, Any]:
+        try:
+            return {"model_config": runner.update_session_model(session_id, request.provider, request.model)}
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ServerRunnerError as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc), "code": exc.code}) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/sessions/{session_id}/mcp-tools")
     def list_mcp_tools(session_id: str) -> dict[str, Any]:
         try:
             return runner.list_mcp_tools(session_id)
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/sessions/{session_id}/mcp/reload")
+    def reload_mcp_tools(session_id: str) -> dict[str, Any]:
+        try:
+            return runner.reload_mcp_tools(session_id)
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ServerRunnerError as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc), "code": exc.code}) from exc
 
     @app.get("/memory")
     def get_memory() -> dict[str, Any]:
@@ -224,6 +272,23 @@ def create_app(runner: ServerRunner | None = None):
             }
         )
 
+        def publish_server_message(message: dict[str, Any]) -> None:
+            try:
+                subscriber.put_nowait(message)
+            except queue.Full:
+                pass
+
+        def server_error_payload(message: str, code: str, runtime: dict[str, Any] | None = None) -> dict[str, Any]:
+            payload: dict[str, Any] = {"message": message, "code": code}
+            if runtime is not None:
+                payload["runtime"] = runtime
+            return {
+                "type": "server_error",
+                "turn_id": "",
+                "timestamp": "",
+                "payload": payload,
+            }
+
         async def send_events() -> None:
             while True:
                 try:
@@ -245,29 +310,15 @@ def create_app(runner: ServerRunner | None = None):
                     code = "session_not_found"
                 elif isinstance(exc, ConfigError):
                     code = "config_error"
-                payload = {"message": str(exc), "code": code}
-                if not isinstance(exc, SessionStoreError):
-                    payload["runtime"] = runner.get_runtime_state(session_id)
-                await websocket.send_json(
-                    {
-                        "type": "server_error",
-                        "turn_id": "",
-                        "timestamp": "",
-                        "payload": payload,
-                    }
-                )
+                runtime = None if isinstance(exc, SessionStoreError) else runner.get_runtime_state(session_id)
+                publish_server_message(server_error_payload(str(exc), code, runtime))
             except ServerRunnerError as exc:
-                await websocket.send_json(
-                    {
-                        "type": "server_error",
-                        "turn_id": "",
-                        "timestamp": "",
-                        "payload": {
-                            "message": str(exc),
-                            "code": exc.code,
-                            "runtime": runner.get_runtime_state(session_id),
-                        },
-                    }
+                publish_server_message(
+                    server_error_payload(str(exc), exc.code, runner.get_runtime_state(session_id))
+                )
+            except Exception as exc:
+                publish_server_message(
+                    server_error_payload(str(exc), "unexpected_error", runner.get_runtime_state(session_id))
                 )
 
         async def receive_commands() -> None:
@@ -277,48 +328,33 @@ def create_app(runner: ServerRunner | None = None):
                     request_id = str(command.get("request_id") or "")
                     approved = bool(command.get("approved"))
                     if not request_id or not runner.resolve_approval(session_id, request_id, approved):
-                        await websocket.send_json(
-                            {
-                                "type": "server_error",
-                                "turn_id": "",
-                                "timestamp": "",
-                                "payload": {
-                                    "message": "Approval request not found.",
-                                    "code": "approval_not_found",
-                                    "runtime": runner.get_runtime_state(session_id),
-                                },
-                            }
+                        publish_server_message(
+                            server_error_payload(
+                                "Approval request not found.",
+                                "approval_not_found",
+                                runner.get_runtime_state(session_id),
+                            )
                         )
                     continue
 
                 if command.get("type") == "interrupt":
                     if not runner.interrupt_session(session_id):
-                        await websocket.send_json(
-                            {
-                                "type": "server_error",
-                                "turn_id": "",
-                                "timestamp": "",
-                                "payload": {
-                                    "message": "No running turn to interrupt.",
-                                    "code": "interrupt_unavailable",
-                                    "runtime": runner.get_runtime_state(session_id),
-                                },
-                            }
+                        publish_server_message(
+                            server_error_payload(
+                                "No running turn to interrupt.",
+                                "interrupt_unavailable",
+                                runner.get_runtime_state(session_id),
+                            )
                         )
                     continue
 
                 if command.get("type") != "user_message":
-                    await websocket.send_json(
-                        {
-                            "type": "server_error",
-                            "turn_id": "",
-                            "timestamp": "",
-                            "payload": {
-                                "message": "Unsupported command type.",
-                                "code": "invalid_command",
-                                "runtime": runner.get_runtime_state(session_id),
-                            },
-                        }
+                    publish_server_message(
+                        server_error_payload(
+                            "Unsupported command type.",
+                            "invalid_command",
+                            runner.get_runtime_state(session_id),
+                        )
                     )
                     continue
                 content = command.get("content")

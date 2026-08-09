@@ -3,22 +3,22 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from lulu_agent.runtime.errors import ERROR_CONFIGURATION, LuluError
 from lulu_agent.safety import DEFAULT_SAFETY_PROFILE, validate_safety_profile
 
 load_dotenv()
 
 
-class ConfigError(RuntimeError):
-    pass
+class ConfigError(LuluError):
+    def __init__(self, error_message: str):
+        super().__init__(error_message=error_message, error_type=ERROR_CONFIGURATION)
 
 
 @dataclass
 class Config:
-    # 模型服务 (required)
-    openai_base_url: str
-    openai_api_key: str
-    openai_model: str
+    # 模型运行参数。provider/model/base_url/api_key 由 ~/.lulu/models.json 构造为 LLMClientConfig。
     model_timeout_seconds: float | str = 60.0
+    model_max_retries: int | str = 3
 
     # 网络搜索服务 (optional)
     tavily_api_key: str = ""
@@ -26,15 +26,16 @@ class Config:
     # 安全档位
     safety_profile: str = DEFAULT_SAFETY_PROFILE
 
+
 def load_config() -> Config:
-    return Config(
-        openai_api_key=os.getenv("OPENAI_API_KEY") or "",
-        openai_base_url=os.getenv("OPENAI_BASE_URL") or "",
-        openai_model=os.getenv("OPENAI_MODEL") or "",
+    config = Config(
         model_timeout_seconds=os.getenv("LULU_MODEL_TIMEOUT_SECONDS") or 60.0,
+        model_max_retries=os.getenv("LULU_MODEL_MAX_RETRIES") or 3,
         tavily_api_key=os.getenv("TAVILY_API_KEY") or "",
         safety_profile=os.getenv("LULU_SAFETY_PROFILE") or DEFAULT_SAFETY_PROFILE,
     )
+    validate_config(config)
+    return config
 
 
 def validate_config(config: Config) -> None:
@@ -47,19 +48,8 @@ def validate_config(config: Config) -> None:
 
 
 def validate_model_config(config: Config) -> None:
-    missing = []
-    if not config.openai_base_url:
-        missing.append("OPENAI_BASE_URL")
-    if not config.openai_api_key:
-        missing.append("OPENAI_API_KEY")
-    if not config.openai_model:
-        missing.append("OPENAI_MODEL")
-
-    if missing:
-        names = ", ".join(missing)
-        raise ConfigError(f"Missing required environment variable(s): {names}")
-
     config.model_timeout_seconds = _validate_model_timeout(config.model_timeout_seconds)
+    config.model_max_retries = _validate_model_max_retries(config.model_max_retries)
 
 
 def _validate_model_timeout(value: float | str) -> float:
@@ -70,6 +60,16 @@ def _validate_model_timeout(value: float | str) -> float:
     if timeout <= 0:
         raise ConfigError("LULU_MODEL_TIMEOUT_SECONDS must be a positive number.")
     return timeout
+
+
+def _validate_model_max_retries(value: int | str) -> int:
+    try:
+        retries = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("LULU_MODEL_MAX_RETRIES must be a non-negative integer.") from exc
+    if isinstance(value, bool) or retries < 0:
+        raise ConfigError("LULU_MODEL_MAX_RETRIES must be a non-negative integer.")
+    return retries
 
 
 config = load_config()

@@ -5,6 +5,7 @@ export type SessionSummary = {
   cwd?: string;
   title?: string;
   message_count?: number;
+  active?: boolean;
 };
 
 export type TranscriptMessage = {
@@ -57,14 +58,32 @@ export type RuntimeState = {
   connected: boolean;
   active_turn_id?: string | null;
   status?: string | null;
+  status_detail?: string | null;
   pending_approval?: ApprovalRequestView | null;
   notices?: string[];
 };
 
 export type ModelConfigView = {
+  provider: string;
   model: string;
   base_url_host: string;
   timeout_seconds: number;
+  max_retries: number;
+};
+
+export type ModelProviderView = {
+  name: string;
+  base_url_host: string;
+  default_model: string;
+  base_url_configured: boolean;
+  api_key_configured: boolean;
+};
+
+export type ProviderModelsView = {
+  provider: string;
+  models: string[];
+  discovered: boolean;
+  error?: string | null;
 };
 
 export type MemoryEntry = {
@@ -124,6 +143,17 @@ export type McpServerToolsView = {
 
 export type McpToolsView = {
   servers: McpServerToolsView[];
+};
+
+export type McpReloadIssue = {
+  server: string;
+  issue_message: string;
+};
+
+export type McpReloadView = {
+  registered: string[];
+  issues: McpReloadIssue[];
+  tools: McpToolsView;
 };
 
 export type TraceTimelineItem = {

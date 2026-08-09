@@ -47,18 +47,26 @@ cleanup() {
   fi
 }
 
-open_gui_when_ready() {
-  local url="http://127.0.0.1:${FRONTEND_PORT}"
-  if ! command -v open >/dev/null 2>&1; then
-    return
-  fi
+wait_for_url() {
+  local url="$1"
   for _ in {1..40}; do
     if curl -fsS "$url" >/dev/null 2>&1; then
-      open "$url" >/dev/null 2>&1 || true
-      return
+      return 0
     fi
     sleep 0.25
   done
+  return 1
+}
+
+open_gui_when_ready() {
+  local backend_url="http://${BACKEND_HOST}:${BACKEND_PORT}/health"
+  local frontend_url="http://127.0.0.1:${FRONTEND_PORT}"
+  if ! command -v open >/dev/null 2>&1; then
+    return
+  fi
+  if wait_for_url "$backend_url" && wait_for_url "$frontend_url"; then
+    open "$frontend_url" >/dev/null 2>&1 || true
+  fi
 }
 
 trap cleanup EXIT INT TERM

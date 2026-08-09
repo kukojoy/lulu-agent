@@ -12,13 +12,13 @@ from cli.input import read_user_input, setup_line_editing
 from cli.approval_provider import CliApprovalProvider
 from lulu_agent.config import ConfigError
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.llm.providers import build_model_config
 from lulu_agent.runtime.event_sinks import CliEventSink, CompositeEventSink, PersistentEventSink
 from lulu_agent.safety.approval import use_approval_provider
 from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
 from lulu_agent.memory.review import MemoryReviewer
 from lulu_agent.skills.review import SkillReviewer
-from lulu_agent.config import config
 from lulu_agent.skills.utils import install_bundled_skills
 
 
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None):
         return
 
     try:
-        llm_client = LLMClient(config)
+        llm_client = LLMClient(build_model_config())
         memory_reviewer = MemoryReviewer(llm_client=llm_client)
         skill_reviewer = SkillReviewer(llm_client=llm_client)
         agent, session_id = create_agent(

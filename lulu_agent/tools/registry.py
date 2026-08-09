@@ -39,6 +39,18 @@ class ToolRegistry:
     def get_issues(self) -> list[ToolRegistryIssue]:
         return list(self._issues)
 
+    def clear_mcp_tools(self) -> None:
+        mcp_tool_names = [name for name in self._tools if name.startswith("mcp_")]
+        for name in mcp_tool_names:
+            self._tools.pop(name, None)
+            self._safety_profiles.pop(name, None)
+
+        self._issues = [
+            issue
+            for issue in self._issues
+            if issue.source != "mcp" and not issue.source.startswith("mcp:")
+        ]
+
     def set_safety_profile(self, tool_name: str, safety_profile: str):
         if tool_name not in self._tools:
             raise ValueError(f"Tool not registered: {tool_name}")

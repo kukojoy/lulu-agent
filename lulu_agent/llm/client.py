@@ -1,10 +1,10 @@
-from urllib.parse import urlparse
+import time
 
 from openai import OpenAI
 
-from lulu_agent.config import validate_config
+from lulu_agent.config import ConfigError
 from lulu_agent.llm.response import (
-    ModelConfig,
+    LLMClientConfig,
     ModelRequest,
     ModelResponse,
     StreamingAssistantResponseBuilder,
@@ -24,19 +24,30 @@ from lulu_agent.llm.usage import extract_usage
 
 
 class LLMClientError(LuluError):
-    pass
+    def __init__(
+        self,
+        error_message: str,
+        error_type: ErrorType = ERROR_EXTERNAL_MODEL,
+        retryable: bool | None = None,
+    ):
+        super().__init__(error_message=error_message, error_type=error_type)
+        self.retryable = retryable
 
 
 class LLMClient:
-    def __init__(self, config):
-        validate_config(config)
-        self.base_url = config.openai_base_url
-        self.model = config.openai_model
-        self.timeout_seconds = config.model_timeout_seconds
+    def __init__(self, config: LLMClientConfig):
+        _validate_client_config(config)
+        self.config = config
+        self.provider = config.provider
+        self.base_url = config.base_url
+        self.model = config.model
+        self.timeout_seconds = config.timeout_seconds
+        self.max_retries = config.max_retries
         self.client = OpenAI(
-            api_key=config.openai_api_key,
+            api_key=config.api_key,
             base_url=self.base_url,
             timeout=self.timeout_seconds,
+            max_retries=0,
         )
 
     def chat(self, messages, tools=None):
@@ -46,21 +57,46 @@ class LLMClient:
         stream = self._create_chat_completion(messages=messages, tools=tools, stream=True)
         return self._wrap_stream(stream)
 
-    def get_model_config(self) -> ModelConfig:
-        return ModelConfig(
-            model=self.model,
-            base_url_host=_base_url_host(self.base_url),
-            timeout_seconds=self.timeout_seconds,
-        )
+    def get_model_config(self) -> LLMClientConfig:
+        return self.config
 
-    def complete(self, request: ModelRequest, on_delta=None) -> ModelResponse:
+    def complete(self, request: ModelRequest, on_delta=None, on_retry=None) -> ModelResponse:
+        attempts = self.max_retries + 1
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._complete_once(request, on_delta=on_delta)
+            except LLMClientError as exc:
+                last_error = exc
+                if not _is_retryable_model_error(exc) or attempt >= attempts:
+                    raise
+                delay_seconds = _retry_delay_seconds(attempt)
+                if on_retry:
+                    on_retry(
+                        {
+                            "attempt": attempt,
+                            "max_retries": self.max_retries,
+                            "delay_seconds": delay_seconds,
+                            "error_type": exc.error_type,
+                            "error_message": exc.error_message,
+                        }
+                    )
+                time.sleep(delay_seconds)
+        raise last_error
+
+    def _complete_once(self, request: ModelRequest, on_delta=None) -> ModelResponse:
         if request.stream:
             stream_response = self.stream_chat(messages=request.messages, tools=request.tools)
             builder = StreamingAssistantResponseBuilder()
-            for content_delta in builder.consume(stream_response):
-                if on_delta:
-                    on_delta(content_delta)
-            return builder.build()
+            try:
+                for content_delta in builder.consume(stream_response):
+                    if on_delta:
+                        on_delta(content_delta)
+                return builder.build()
+            except LLMClientError as exc:
+                if builder.streamed:
+                    exc.retryable = False
+                raise
 
         response = self.chat(messages=request.messages, tools=request.tools)
         return ModelResponse(
@@ -124,6 +160,21 @@ def _classify_error_type(exc: Exception) -> ErrorType:
     return ERROR_EXTERNAL_MODEL
 
 
+def _is_retryable_model_error(exc: LLMClientError) -> bool:
+    if exc.retryable is not None:
+        return exc.retryable
+    return exc.error_type in {
+        ERROR_MODEL_TIMEOUT,
+        ERROR_MODEL_CONNECTION,
+        ERROR_MODEL_RATE_LIMIT,
+        ERROR_EXTERNAL_MODEL,
+    }
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    return 2.0
+
+
 def _is_exc_type(exc: Exception, *names: str) -> bool:
     return type(exc).__name__ in names
 
@@ -164,10 +215,19 @@ def _safe_exception_message(exc: Exception) -> str:
     return message
 
 
-def _base_url_host(base_url: str) -> str:
-    parsed = urlparse(base_url)
-    if parsed.hostname:
-        return parsed.hostname
-    if parsed.path:
-        return parsed.path.split("/", 1)[0]
-    return ""
+def _validate_client_config(config: LLMClientConfig) -> None:
+    missing = []
+    if not config.base_url:
+        missing.append("base_url")
+    if not config.api_key:
+        missing.append("api_key")
+    if not config.model:
+        missing.append("model")
+    if missing:
+        names = ", ".join(missing)
+        provider = f" for provider {config.provider!r}" if config.provider else ""
+        raise ConfigError(f"Missing model config field(s){provider}: {names}")
+    if config.timeout_seconds <= 0:
+        raise ConfigError("Model timeout_seconds must be a positive number.")
+    if isinstance(config.max_retries, bool) or config.max_retries < 0:
+        raise ConfigError("Model max_retries must be a non-negative integer.")

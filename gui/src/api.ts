@@ -1,7 +1,10 @@
 import type {
   MemoryView,
+  McpReloadView,
   McpToolsView,
   ModelConfigView,
+  ModelProviderView,
+  ProviderModelsView,
   RuntimeEvent,
   RuntimeState,
   SkillDocument,
@@ -85,8 +88,42 @@ export async function getModelConfig(): Promise<ModelConfigView> {
   return data.model_config;
 }
 
+export async function getSessionModelConfig(sessionId: string): Promise<ModelConfigView> {
+  const data = await requestJson<{ model_config: ModelConfigView }>(`/sessions/${sessionId}/model`);
+  return data.model_config;
+}
+
+export async function listModelProviders(): Promise<ModelProviderView[]> {
+  const data = await requestJson<{ providers: ModelProviderView[] }>("/runtime/model/providers");
+  return data.providers;
+}
+
+export function listProviderModels(provider: string): Promise<ProviderModelsView> {
+  return requestJson<ProviderModelsView>(
+    `/runtime/model/providers/${encodeURIComponent(provider)}/models`,
+  );
+}
+
+export async function updateSessionModel(
+  sessionId: string,
+  provider: string,
+  model: string,
+): Promise<ModelConfigView> {
+  const data = await requestJson<{ model_config: ModelConfigView }>(`/sessions/${sessionId}/model`, {
+    method: "POST",
+    body: JSON.stringify({ provider, model }),
+  });
+  return data.model_config;
+}
+
 export function listMcpTools(sessionId: string): Promise<McpToolsView> {
   return requestJson<McpToolsView>(`/sessions/${sessionId}/mcp-tools`);
+}
+
+export function reloadMcpTools(sessionId: string): Promise<McpReloadView> {
+  return requestJson<McpReloadView>(`/sessions/${sessionId}/mcp/reload`, {
+    method: "POST",
+  });
 }
 
 export async function getMemory(): Promise<MemoryView> {
