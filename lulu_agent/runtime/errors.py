@@ -27,6 +27,9 @@ class ErrorType(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     APPROVAL_DENIED = "approval_denied"
 
+    # Turn control
+    USER_CANCELLED = "user_cancelled"
+
     # Storage / lookup
     NOT_FOUND = "not_found"
 
@@ -49,6 +52,7 @@ ERROR_EXTERNAL_MODEL = ErrorType.EXTERNAL_MODEL
 ERROR_OUTPUT_TRUNCATED = ErrorType.OUTPUT_TRUNCATED
 ERROR_PERMISSION_DENIED = ErrorType.PERMISSION_DENIED
 ERROR_APPROVAL_DENIED = ErrorType.APPROVAL_DENIED
+ERROR_USER_CANCELLED = ErrorType.USER_CANCELLED
 ERROR_NOT_FOUND = ErrorType.NOT_FOUND
 ERROR_CONFIGURATION = ErrorType.CONFIGURATION
 

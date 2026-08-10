@@ -388,14 +388,17 @@ h2 {
 }
 
 .approval-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  position: relative;
+  z-index: 6;
+  display: flow-root;
   padding: 12px 20px;
   border-bottom: 1px solid #e6d7b8;
   background: #fff8e8;
   color: #4f3d16;
+}
+
+.approval-banner > div:not(.approval-actions) {
+  min-width: 0;
 }
 
 .approval-banner p {
@@ -405,19 +408,23 @@ h2 {
 
 .approval-banner code {
   display: block;
-  max-width: min(720px, 62vw);
+  width: 100%;
+  max-width: 100%;
   margin-top: 6px;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: #263244;
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .approval-actions {
   display: flex;
   flex: 0 0 auto;
+  float: right;
   gap: 8px;
+  margin-left: 16px;
+  margin-bottom: 8px;
 }
 
 .approval-actions button {
@@ -1153,6 +1160,206 @@ h2 {
   background: #fbfcfe;
   color: #293342;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.trace-block,
+.trace-list,
+.trace-timeline {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.trace-list {
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  padding-right: 10px;
+}
+
+.trace-turn {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-turn-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) max-content minmax(0, max-content) max-content;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: #ffffff;
+  color: #263244;
+  text-align: left;
+}
+
+.trace-turn.failed .trace-turn-toggle {
+  border-color: #efc6be;
+  background: #fff7f5;
+}
+
+.trace-turn.running .trace-turn-toggle {
+  border-color: #c9d8f0;
+  background: #f7faff;
+}
+
+.trace-turn-toggle strong,
+.trace-item-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-turn-toggle small,
+.trace-item-head small {
+  color: #697486;
+  font-size: 11px;
+}
+
+.trace-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #edf7f2;
+  color: #247056;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.trace-status.completed {
+  background: #edf7f2;
+  color: #247056;
+}
+
+.trace-status.running {
+  background: #eef4ff;
+  color: #315f9d;
+}
+
+.trace-status.failed {
+  background: #fdecea;
+  color: #b33a2e;
+}
+
+.trace-error-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #f0c5bd;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #ffffff;
+  color: #9f3429;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.trace-turn-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe2ea;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.trace-turn-counts,
+.trace-item-error {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.trace-turn-counts span {
+  border: 1px solid #dbe2ea;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #ffffff;
+  color: #4f5d6f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trace-item {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border-left: 3px solid #cfd6e1;
+  padding: 7px 9px;
+  background: #ffffff;
+}
+
+.trace-item-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-item-error span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #4f5d6f;
+  font-size: 12px;
+}
+
+.trace-detail-fields {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trace-detail-fields span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #c9d9ea;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #eef6ff;
+  color: #2f5f91;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trace-detail-fields strong {
+  color: #65758b;
+  font-weight: 800;
+}
+
+.trace-detail-fields span.error-type {
+  border-color: #efb5b5;
+  background: #fffafa;
+  color: #9c2e2e;
+}
+
+.trace-detail-fields span.error-type strong {
+  color: #9c2e2e;
+}
+
+.trace-item-detail {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: #4f5d6f;
   font-size: 12px;
   line-height: 1.55;
 }

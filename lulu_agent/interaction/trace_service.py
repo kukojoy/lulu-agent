@@ -4,6 +4,7 @@ from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_DELTA,
     EVENT_ASSISTANT_MESSAGE,
     EVENT_MODEL_REQUEST,
+    EVENT_MODEL_RETRY,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_TURN_END,
@@ -31,6 +32,19 @@ class TraceInteractionService:
     ) -> list[dict[str, Any]]:
         return [_timeline_item(record) for record in self.list_events(session_id, turn_id=turn_id)]
 
+    def build_turns(self, session_id: str) -> list[dict[str, Any]]:
+        turns_by_id: dict[str, dict[str, Any]] = {}
+        for item in self.build_timeline(session_id):
+            turn_id = item.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                continue
+            turn = turns_by_id.setdefault(turn_id, _empty_turn(turn_id))
+            turn["event_count"] += 1
+            _update_turn_summary(turn, item)
+            if item.get("event_type") != EVENT_ASSISTANT_DELTA:
+                turn["items"].append(item)
+        return list(turns_by_id.values())
+
 
 def _timeline_item(record: dict[str, Any]) -> dict[str, Any]:
     event_type = record.get("event_type")
@@ -40,17 +54,8 @@ def _timeline_item(record: dict[str, Any]) -> dict[str, Any]:
         "turn_id": record.get("turn_id"),
         "timestamp": record.get("timestamp"),
         "label": _event_label(event_type),
-        "detail": _event_detail(event_type, payload),
         "payload": payload,
     }
-    if event_type in {EVENT_TOOL_CALL, EVENT_TOOL_RESULT}:
-        item["tool_name"] = payload.get("tool_name")
-        item["tool_call_id"] = payload.get("tool_call_id")
-    if event_type == EVENT_TOOL_RESULT:
-        item["ok"] = payload.get("ok")
-    if event_type in {EVENT_TOOL_RESULT, EVENT_TURN_END}:
-        item["error"] = payload.get("error")
-        item["error_type"] = payload.get("error_type")
     return item
 
 
@@ -59,6 +64,7 @@ def _event_label(event_type: str | None) -> str:
         EVENT_TURN_START: "Turn started",
         EVENT_USER_MESSAGE: "User message",
         EVENT_MODEL_REQUEST: "Model request",
+        EVENT_MODEL_RETRY: "Model retry",
         EVENT_ASSISTANT_DELTA: "Assistant delta",
         EVENT_ASSISTANT_MESSAGE: "Assistant message",
         EVENT_TOOL_CALL: "Tool call",
@@ -68,25 +74,44 @@ def _event_label(event_type: str | None) -> str:
     return labels.get(event_type, str(event_type or "unknown"))
 
 
-def _event_detail(event_type: str | None, payload: dict[str, Any]) -> str:
-    if event_type == EVENT_USER_MESSAGE:
-        return str(payload.get("content") or "")
+def _empty_turn(turn_id: str) -> dict[str, Any]:
+    return {
+        "turn_id": turn_id,
+        "started_at": None,
+        "ended_at": None,
+        "status": "running",
+        "exit_reason": None,
+        "error": None,
+        "error_type": None,
+        "event_count": 0,
+        "model_request_count": 0,
+        "model_retry_count": 0,
+        "assistant_delta_count": 0,
+        "tool_call_count": 0,
+        "tool_result_count": 0,
+        "items": [],
+    }
+
+
+def _update_turn_summary(turn: dict[str, Any], item: dict[str, Any]) -> None:
+    event_type = item.get("event_type")
+    timestamp = item.get("timestamp")
+    if turn["started_at"] is None:
+        turn["started_at"] = timestamp
     if event_type == EVENT_MODEL_REQUEST:
-        return (
-            f"model={payload.get('model', '')} "
-            f"messages={payload.get('message_count', 0)} "
-            f"tools={payload.get('tool_count', 0)}"
-        )
-    if event_type == EVENT_ASSISTANT_DELTA:
-        return str(payload.get("delta") or "")
-    if event_type == EVENT_ASSISTANT_MESSAGE:
-        return str(payload.get("content") or "")
-    if event_type == EVENT_TOOL_CALL:
-        return f"{payload.get('tool_name')} args={payload.get('arguments', {})}"
-    if event_type == EVENT_TOOL_RESULT:
-        return f"{payload.get('tool_name')} ok={payload.get('ok')}"
-    if event_type == EVENT_TURN_END:
-        if payload.get("error"):
-            return str(payload.get("error"))
-        return f"{payload.get('status')} / {payload.get('exit_reason')}"
-    return ""
+        turn["model_request_count"] += 1
+    elif event_type == EVENT_MODEL_RETRY:
+        turn["model_retry_count"] += 1
+    elif event_type == EVENT_ASSISTANT_DELTA:
+        turn["assistant_delta_count"] += 1
+    elif event_type == EVENT_TOOL_CALL:
+        turn["tool_call_count"] += 1
+    elif event_type == EVENT_TOOL_RESULT:
+        turn["tool_result_count"] += 1
+    elif event_type == EVENT_TURN_END:
+        payload = item.get("payload") or {}
+        turn["ended_at"] = timestamp
+        turn["status"] = payload.get("status")
+        turn["exit_reason"] = payload.get("exit_reason")
+        turn["error"] = payload.get("error")
+        turn["error_type"] = payload.get("error_type")

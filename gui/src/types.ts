@@ -161,13 +161,24 @@ export type TraceTimelineItem = {
   turn_id?: string;
   timestamp?: string;
   label?: string;
-  detail?: string;
-  tool_name?: string;
-  tool_call_id?: string;
-  ok?: boolean;
+  payload?: Record<string, unknown>;
+};
+
+export type TraceTurnView = {
+  turn_id: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  status?: string | null;
+  exit_reason?: string | null;
   error?: string | null;
   error_type?: string | null;
-  payload?: Record<string, unknown>;
+  event_count: number;
+  model_request_count: number;
+  model_retry_count: number;
+  assistant_delta_count: number;
+  tool_call_count: number;
+  tool_result_count: number;
+  items: TraceTimelineItem[];
 };
 
 export type RuntimeEvent = {

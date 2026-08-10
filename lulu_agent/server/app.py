@@ -103,6 +103,13 @@ def create_app(runner: ServerRunner | None = None):
         except (SessionStoreError, TraceStoreError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/sessions/{session_id}/trace/turns")
+    def get_trace_turns(session_id: str) -> dict[str, Any]:
+        try:
+            return {"turns": runner.get_trace_turns(session_id)}
+        except (SessionStoreError, TraceStoreError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/sessions/{session_id}/runtime")
     def get_runtime_state(session_id: str) -> dict[str, Any]:
         try:

@@ -2,11 +2,11 @@
 
 `lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI 和 CLI 两种入口，可以在本机完成对话、调用工具、读写文件、执行命令、维护长期记忆和复用技能。
 
-当前状态：`v3.6 in progress`。
+当前状态：`v3.7 completed`。
 
 ## 主要能力
 
-- 本地 Web GUI，支持会话列表、聊天、工具调用展示、任务状态、Memory 和 Skills 查看。
+- 本地 Web GUI，支持会话列表、聊天、工具调用展示、任务状态、Trace、Memory 和 Skills 查看。
 - CLI 入口，支持会话恢复、会话查看和 context inspect。
 - OpenAI-compatible 模型服务，支持 streaming 和 tool calling。
 - 本地 session 持久化，可以恢复历史会话。

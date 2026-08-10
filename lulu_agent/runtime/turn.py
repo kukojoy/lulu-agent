@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from lulu_agent.runtime.errors import ErrorType
+from lulu_agent.runtime.errors import ERROR_USER_CANCELLED, ErrorType
 
 
 class TurnStatus(StrEnum):
@@ -134,7 +134,7 @@ class TurnRuntime:
         self,
         error: str = "Interrupted by user.",
         reason: TurnExitReason = TurnExitReason.USER_INTERRUPTED,
-        error_type: ErrorType | None = None,
+        error_type: ErrorType | None = ERROR_USER_CANCELLED,
     ) -> None:
         self.status = TurnStatus.INTERRUPTED
         self.exit_reason = TurnExitReason(reason)

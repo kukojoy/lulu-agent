@@ -6,6 +6,7 @@ import {
   Brain,
   ChevronDown,
   ChevronRight,
+  History,
   ListTree,
   MessageSquarePlus,
   PanelLeftClose,
@@ -29,6 +30,7 @@ import {
   getRuntimeState,
   getSessionModelConfig,
   getTaskState,
+  getTraceTurns,
   getTraceTimeline,
   listModelProviders,
   listMcpTools,
@@ -58,9 +60,10 @@ import type {
   TaskState,
   ToolCallView,
   TranscriptMessage,
+  TraceTurnView,
 } from "./types";
 
-type InspectorView = "task" | "memory" | "skills" | "mcp";
+type InspectorView = "trace" | "task" | "memory" | "skills" | "mcp";
 type ConnectionStatus = "draft" | "connecting" | "ready" | "reconnecting";
 
 const RUN_SOCKET_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000];
@@ -71,6 +74,119 @@ function shortSessionId(sessionId: string): string {
 
 function formatDetails(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function formatTraceTimestamp(value?: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.replace("T", " ").replace(/\.\d+/, "").replace(/([+-]\d{2}:\d{2}|Z)$/, "");
+  }
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+type TraceTimelineItemView = TraceTurnView["items"][number];
+type TraceDetailField = { label: string; value: string };
+
+function traceTurnStatusClass(turn: TraceTurnView): string {
+  if (turn.status === "failed" || turn.status === "interrupted" || turn.error || turn.error_type) {
+    return "failed";
+  }
+  if (turn.status === "running") {
+    return "running";
+  }
+  return "completed";
+}
+
+function tracePayloadValue(item: TraceTimelineItemView, key: string): unknown {
+  return item.payload?.[key];
+}
+
+function traceDetailFieldClass(field: TraceDetailField): string {
+  return field.label === "error_type" ? "error-type" : "";
+}
+
+function traceDetailFields(item: TraceTimelineItemView): TraceDetailField[] {
+  if (item.event_type === "model_request") {
+    return [
+      { label: "model", value: String(tracePayloadValue(item, "model") ?? "-") },
+      { label: "messages", value: String(tracePayloadValue(item, "message_count") ?? 0) },
+      { label: "tools", value: String(tracePayloadValue(item, "tool_count") ?? 0) },
+    ];
+  }
+  if (item.event_type === "model_retry") {
+    return [
+      {
+        label: "attempt",
+        value: `${String(tracePayloadValue(item, "attempt") ?? 0)}/${String(tracePayloadValue(item, "max_retries") ?? 0)}`,
+      },
+      { label: "error_type", value: String(tracePayloadValue(item, "error_type") ?? "-") },
+    ];
+  }
+  if (item.event_type === "assistant_message") {
+    return [
+      { label: "tool_calls", value: String(tracePayloadValue(item, "tool_call_count") ?? 0) },
+      { label: "final", value: String(tracePayloadValue(item, "final") ?? false) },
+      { label: "streamed", value: String(tracePayloadValue(item, "streamed") ?? false) },
+    ];
+  }
+  if (item.event_type === "tool_call") {
+    return [
+      { label: "tool", value: String(tracePayloadValue(item, "tool_name") || "-") },
+      { label: "call_id", value: String(tracePayloadValue(item, "tool_call_id") || "-") },
+    ];
+  }
+  if (item.event_type === "tool_result") {
+    const fields = [
+      { label: "tool", value: String(tracePayloadValue(item, "tool_name") || "-") },
+      { label: "ok", value: String(tracePayloadValue(item, "ok") ?? false) },
+    ];
+    const errorType = tracePayloadValue(item, "error_type");
+    if (errorType) {
+      fields.push({ label: "error_type", value: String(errorType) });
+    }
+    return fields;
+  }
+  if (item.event_type === "turn_end") {
+    return [
+      { label: "status", value: String(tracePayloadValue(item, "status") ?? "-") },
+      { label: "exit_reason", value: String(tracePayloadValue(item, "exit_reason") ?? "-") },
+    ];
+  }
+  return [];
+}
+
+function traceDetailText(item: TraceTimelineItemView): string {
+  if (item.event_type === "user_message") {
+    return String(tracePayloadValue(item, "content") || "");
+  }
+  if (item.event_type === "assistant_message") {
+    return String(tracePayloadValue(item, "content") || "");
+  }
+  if (item.event_type === "tool_call") {
+    return formatDetails(tracePayloadValue(item, "arguments") ?? {});
+  }
+  if (item.event_type === "tool_result") {
+    return String(tracePayloadValue(item, "error") || "");
+  }
+  if (item.event_type === "turn_end") {
+    return String(tracePayloadValue(item, "error") || "");
+  }
+  if (
+    item.event_type === "model_request" ||
+    item.event_type === "model_retry" ||
+    item.event_type === "tool_result"
+  ) {
+    return "";
+  }
+  return "";
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -475,6 +591,7 @@ export function App() {
   const [inspection, setInspection] = useState<SessionInspection | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [taskState, setTaskState] = useState<TaskState | null>(null);
+  const [traceTurns, setTraceTurns] = useState<TraceTurnView[]>([]);
   const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
   const [modelConfig, setModelConfig] = useState<ModelConfigView | null>(null);
   const [modelProviders, setModelProviders] = useState<ModelProviderView[]>([]);
@@ -496,7 +613,7 @@ export function App() {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(560);
-  const [inspectorView, setInspectorView] = useState<InspectorView>("task");
+  const [inspectorView, setInspectorView] = useState<InspectorView>("trace");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -504,6 +621,7 @@ export function App() {
   const [streamingMessage, setStreamingMessage] = useState("");
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestView | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+  const [expandedTraceTurns, setExpandedTraceTurns] = useState<Set<string>>(new Set());
   const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -638,6 +756,14 @@ export function App() {
     [],
   );
 
+  const refreshTraceTurns = useCallback(async () => {
+    if (!activeSessionId) {
+      setTraceTurns([]);
+      return;
+    }
+    setTraceTurns(await getTraceTurns(activeSessionId));
+  }, [activeSessionId]);
+
   const refreshSession = useCallback(
     async (sessionId: string) => {
       const [
@@ -652,9 +778,11 @@ export function App() {
         getRuntimeState(sessionId),
       ]);
       const nextModelConfig = await getSessionModelConfig(sessionId).catch(() => null);
+      const nextTraceTurns = await getTraceTurns(sessionId).catch(() => []);
       setInspection(nextInspection);
       setMessages(nextMessages);
       setTaskState(nextTaskState);
+      setTraceTurns(nextTraceTurns);
       applyRuntimeState(nextRuntimeState);
       if (nextModelConfig) {
         setModelConfig(nextModelConfig);
@@ -681,6 +809,7 @@ export function App() {
       setTaskState(null);
       setRuntimeState(null);
       setLiveToolItems([]);
+      setTraceTurns([]);
       setMemoryView(null);
       setSkillList(null);
       setSelectedSkill(null);
@@ -699,6 +828,14 @@ export function App() {
       return;
     }
     setMemoryView(await getMemory());
+  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+
+  const refreshTask = useCallback(async () => {
+    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setTaskState(null);
+      return;
+    }
+    setTaskState(await getTaskState(activeSessionId));
   }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshSkills = useCallback(async () => {
@@ -979,7 +1116,12 @@ export function App() {
   }, [refreshActiveSession]);
 
   useEffect(() => {
-    if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+    setExpandedTraceTurns(new Set());
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setTraceTurns([]);
       setMemoryView(null);
       setSkillList(null);
       setSelectedSkill(null);
@@ -987,6 +1129,16 @@ export function App() {
       return;
     }
     if (!taskOpen) {
+      return;
+    }
+    if (inspectorView === "trace") {
+      refreshTraceTurns().catch((nextError) => setError(String(nextError)));
+    }
+    if (runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
+      setMemoryView(null);
+      setSkillList(null);
+      setSelectedSkill(null);
+      setMcpTools(null);
       return;
     }
     if (inspectorView === "memory") {
@@ -1002,6 +1154,7 @@ export function App() {
     activeSessionId,
     inspectorView,
     refreshMemory,
+    refreshTraceTurns,
     refreshSkills,
     refreshMcpTools,
     runtimeState?.active,
@@ -1587,11 +1740,6 @@ export function App() {
 
         {approvalRequest && (
           <div className="approval-banner">
-            <div>
-              <strong>Approval required</strong>
-              <p>{approvalRequest.reason}</p>
-              <code>{approvalRequest.subject}</code>
-            </div>
             <div className="approval-actions">
               <button className="approval-deny" type="button" onClick={() => respondToApproval(false)}>
                 Deny
@@ -1599,6 +1747,11 @@ export function App() {
               <button className="approval-allow" type="button" onClick={() => respondToApproval(true)}>
                 Approve
               </button>
+            </div>
+            <div>
+              <strong>Approval required</strong>
+              <p>{approvalRequest.reason}</p>
+              <code>{approvalRequest.subject}</code>
             </div>
           </div>
         )}
@@ -1880,6 +2033,15 @@ export function App() {
             <div className="section-title">
             <div className="inspector-tabs">
                 <button
+                  className={`inspector-tab ${inspectorView === "trace" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setInspectorView("trace")}
+                  title="Trace"
+                >
+                  <History size={16} />
+                  <span>Trace</span>
+                </button>
+                <button
                   className={`inspector-tab ${inspectorView === "task" ? "active" : ""}`}
                   type="button"
                   onClick={() => setInspectorView("task")}
@@ -1925,24 +2087,133 @@ export function App() {
                 <PanelRightClose size={17} />
               </button>
             </div>
-            {inspectorView === "task" && !currentSessionActive ? (
-              <p className="muted">Chat with lulu in this session to load task state.</p>
-            ) : inspectorView === "task" && taskState ? (
-              <div className="task-block">
-                <strong>{taskState.goal}</strong>
-                <span className="status-chip">{taskState.status}</span>
-                <ol>
-                  {taskState.steps.map((step) => (
-                    <li key={step.id}>
-                      <span>{step.step}</span>
-                      <small>{step.status}</small>
-                    </li>
-                  ))}
-                </ol>
-                {taskState.next_action && <p className="next-action">{taskState.next_action}</p>}
+            {inspectorView === "trace" ? (
+              <div className="trace-block">
+                <div className="knowledge-header">
+                  <strong>Trace</strong>
+                  <button className="text-button" type="button" onClick={() => void refreshTraceTurns()}>
+                    <RefreshCcw size={14} />
+                    Refresh
+                  </button>
+                </div>
+                {!activeSessionId ? (
+                  <p className="muted">Chat with lulu in this session to load trace.</p>
+                ) : traceTurns.length > 0 ? (
+                  <div className="trace-list">
+                    {traceTurns.map((turn) => {
+                      const expanded = expandedTraceTurns.has(turn.turn_id);
+                      const turnStatusClass = traceTurnStatusClass(turn);
+                      return (
+                        <section className={`trace-turn ${turnStatusClass}`} key={turn.turn_id}>
+                          <button
+                            className="trace-turn-toggle"
+                            type="button"
+                            aria-expanded={expanded}
+                            onClick={() =>
+                              setExpandedTraceTurns((current) => {
+                                const next = new Set(current);
+                                if (next.has(turn.turn_id)) {
+                                  next.delete(turn.turn_id);
+                                } else {
+                                  next.add(turn.turn_id);
+                                }
+                                return next;
+                              })
+                            }
+                          >
+                            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                            <strong>{turn.turn_id}</strong>
+                            <span className={`trace-status ${turnStatusClass}`}>{turn.status || "running"}</span>
+                            {turn.error_type && <span className="trace-error-type">{turn.error_type}</span>}
+                            <small>{turn.event_count} events</small>
+                          </button>
+                          {expanded && (
+                            <div className="trace-turn-body">
+                              <div className="trace-turn-counts">
+                                <span>model {turn.model_request_count}</span>
+                                <span>retry {turn.model_retry_count}</span>
+                                <span>text chunk {turn.assistant_delta_count}</span>
+                                <span>tool call {turn.tool_call_count}</span>
+                                <span>tool result {turn.tool_result_count}</span>
+                              </div>
+                              <div className="trace-timeline">
+                                {turn.items.map((item, index) => {
+                                  const itemError = tracePayloadValue(item, "error");
+                                  const itemErrorType = tracePayloadValue(item, "error_type");
+                                  const itemErrorText = itemError ? String(itemError) : "";
+                                  const itemErrorTypeText = itemErrorType ? String(itemErrorType) : "";
+                                  const showItemError =
+                                    item.event_type !== "turn_end" &&
+                                    item.event_type !== "model_retry" &&
+                                    item.event_type !== "tool_result" &&
+                                    Boolean(itemErrorText || itemErrorTypeText);
+                                  const detailFields = traceDetailFields(item);
+                                  const detailText = traceDetailText(item);
+                                  return (
+                                    <article className="trace-item" key={`${turn.turn_id}-${index}-${item.event_type}`}>
+                                      <div className="trace-item-head">
+                                        <strong>{item.label || item.event_type || "event"}</strong>
+                                        {item.timestamp && <small>{formatTraceTimestamp(item.timestamp)}</small>}
+                                      </div>
+                                      {detailFields.length > 0 && (
+                                        <div className="trace-detail-fields">
+                                          {detailFields.map((field) => (
+                                            <span key={field.label} className={traceDetailFieldClass(field)}>
+                                              <strong>{field.label}</strong>
+                                              {field.value}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {detailText && <p className="trace-item-detail">{detailText}</p>}
+                                      {showItemError && (
+                                        <div className="trace-item-error">
+                                          {itemErrorTypeText && <span className="error-type-pill">{itemErrorTypeText}</span>}
+                                          {itemErrorText && <span>{itemErrorText}</span>}
+                                        </div>
+                                      )}
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="muted">No trace recorded.</p>
+                )}
               </div>
             ) : inspectorView === "task" ? (
-              <p className="muted">No task state.</p>
+              <div className="knowledge-block">
+                <div className="knowledge-header">
+                  <strong>Task</strong>
+                  <button className="text-button" type="button" onClick={() => void refreshTask()}>
+                    Refresh
+                  </button>
+                </div>
+                {!currentSessionActive ? (
+                  <p className="muted">Chat with lulu in this session to load task state.</p>
+                ) : taskState ? (
+                  <div className="task-block">
+                    <strong>{taskState.goal}</strong>
+                    <span className="status-chip">{taskState.status}</span>
+                    <ol>
+                      {taskState.steps.map((step) => (
+                        <li key={step.id}>
+                          <span>{step.step}</span>
+                          <small>{step.status}</small>
+                        </li>
+                      ))}
+                    </ol>
+                    {taskState.next_action && <p className="next-action">{taskState.next_action}</p>}
+                  </div>
+                ) : (
+                  <p className="muted">No task state.</p>
+                )}
+              </div>
             ) : inspectorView === "memory" ? (
               <div className="knowledge-block">
                 <div className="knowledge-header">

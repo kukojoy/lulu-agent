@@ -14,6 +14,7 @@ import type {
   TaskState,
   TranscriptMessage,
   TraceTimelineItem,
+  TraceTurnView,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
@@ -149,6 +150,13 @@ export async function getTraceTimeline(
     `/sessions/${sessionId}/trace${query}`,
   );
   return data.timeline;
+}
+
+export async function getTraceTurns(sessionId: string): Promise<TraceTurnView[]> {
+  const data = await requestJson<{ turns: TraceTurnView[] }>(
+    `/sessions/${sessionId}/trace/turns`,
+  );
+  return data.turns;
 }
 
 export function openEventSocket(

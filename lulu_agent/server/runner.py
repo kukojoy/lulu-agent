@@ -248,6 +248,10 @@ class ServerRunner:
         self.session_service.resume_session(session_id)
         return self.trace_service.build_timeline(session_id, turn_id=turn_id)
 
+    def get_trace_turns(self, session_id: str) -> list[dict[str, Any]]:
+        self.session_service.resume_session(session_id)
+        return self.trace_service.build_turns(session_id)
+
     def get_memory(self) -> dict[str, Any]:
         return self.memory_store.read()
 
