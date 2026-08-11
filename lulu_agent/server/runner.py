@@ -20,7 +20,9 @@ from lulu_agent.safety.approval import ApprovalProvider, ApprovalRequest, use_ap
 from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
 from lulu_agent.runtime.events import EVENT_APPROVAL_REQUEST, EventPayloadBuilder, RuntimeEvent
 from lulu_agent.server.events import EventHub, HubEventSink
+from lulu_agent.memory.review import MemoryReviewer
 from lulu_agent.skills.store import SkillStore
+from lulu_agent.skills.review import SkillReviewer
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.storage.trace_store import TraceStore
@@ -340,6 +342,8 @@ class ServerRunner:
                             PersistentEventSink(self.trace_store, session_id),
                         ]
                     ),
+                    memory_reviewer=MemoryReviewer(memory_store=self.memory_store),
+                    skill_reviewer=SkillReviewer(skill_store=self.skill_store),
                 )
                 self._agents[session_id] = agent
             return agent

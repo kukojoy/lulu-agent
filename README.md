@@ -2,11 +2,11 @@
 
 `lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI 和 CLI 两种入口，可以在本机完成对话、调用工具、读写文件、执行命令、维护长期记忆和复用技能。
 
-当前状态：`v3.7 completed`。
+当前状态：`v3.8 completed`。
 
 ## 主要能力
 
-- 本地 Web GUI，支持会话列表、聊天、工具调用展示、任务状态、Trace、Memory 和 Skills 查看。
+- 本地 Web GUI，支持会话列表、聊天、工具调用展示、任务状态、Trace、Memory、Skills 和 MCP 工具查看。
 - CLI 入口，支持会话恢复、会话查看和 context inspect。
 - OpenAI-compatible 模型服务，支持 streaming 和 tool calling。
 - 本地 session 持久化，可以恢复历史会话。
@@ -15,6 +15,7 @@
 - Web 工具：通过 Tavily 进行搜索和网页内容提取。
 - 长期记忆：将跨会话事实和偏好保存到全局 memory。
 - Skills：将可复用流程沉淀为全局 skill，并在需要时读取。
+- Knowledge review：后台定期审查 memory / skills，并在 Trace 中展示 review 是否发生和粗粒度变更摘要。
 - MCP：从全局 MCP 配置加载外部 stdio MCP 工具。
 
 ## 安装
@@ -183,6 +184,7 @@ Memory 用来保存跨会话的长期事实、偏好和经验。
 - 你可以直接告诉 agent 需要记住、更新或忘记某条长期信息。
 - Memory 会在后续对话中作为上下文提供给模型。
 - Memory 不等于聊天记录，不适合保存临时任务状态或完整对话。
+- 后台 memory review 会周期性检查最近对话和现有 memory，结果写入 Trace，不进入聊天记录。
 
 ## Skills
 
@@ -199,6 +201,7 @@ Skill 用来保存可复用的操作流程或工作方法。
 - agent 可以按需查看已有 skill。
 - 你可以要求 agent 创建或修改某个 skill。
 - 内置 skill 会在启动时安装到全局 skills 目录；已有同名 skill 不会被覆盖。
+- 后台 skill review 会周期性检查最近对话是否沉淀出可复用流程，结果写入 Trace，不进入聊天记录。
 
 ## MCP
 
@@ -211,6 +214,10 @@ MCP 用来接入外部工具。当前支持 stdio MCP server。
 ```
 
 启动时 lulu-agent 会读取该配置，发现 MCP tools，并把它们注册为可调用工具。
+
+## Trace
+
+GUI 的 Trace 面板按 turn 展示运行过程，包括模型请求、retry、工具调用、工具结果、turn 结束状态，以及后台 knowledge review 的 `review_summary`。发生过 review 的 turn 会有 `reviewed`、`review updated` 或 `review failed` 标识。
 
 ## 注意事项
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 from lulu_agent.context.manager import ContextManager
 from lulu_agent.core.agent_loop import AgentLoop
@@ -37,33 +38,40 @@ If no skill should be created, refined, merged, or pruned, answer exactly: Nothi
 @dataclass(frozen=True)
 class SkillReviewResult:
     response: str
-    messages: list[dict]
+    summaries: list[str] = field(default_factory=list)
 
     @property
-    def updated(self) -> bool:
-        for message in self.messages:
-            if message.get("role") == "assistant" and message.get("tool_calls"):
-                return True
-        return False
+    def changed(self) -> bool:
+        return bool(self.summaries)
+
+    @property
+    def summary_content(self) -> str:
+        if not self.summaries:
+            return "no changes"
+        shown = self.summaries[:3]
+        summary = "; ".join(shown)
+        remaining = len(self.summaries) - len(shown)
+        if remaining > 0:
+            summary = f"{summary}; and {remaining} more"
+        return summary
 
 
 class SkillReviewer:
     def __init__(
         self,
-        llm_client: LLMClient | None = None,
         skill_store: SkillStore | None = None,
         max_turns: int = 20,
         review_turns: int = 8,
     ):
-        self.llm_client = llm_client
+        self.type = "skills"
         self.skill_store = skill_store or SkillStore()
         self.max_turns = max_turns
         self.review_turns = review_turns
 
-    def review(self, messages_snapshot: list[dict]) -> SkillReviewResult:
+    def review(self, messages_snapshot: list[dict], llm_client: LLMClient) -> SkillReviewResult:
         """后台检查对话是否需要更新 skill, 不污染主链路 messages/session"""
         sub_agent = AgentLoop(
-            llm_client=self.llm_client,
+            llm_client=llm_client,
             tool_registry=_skill_only_registry(),
             context_manager=ContextManager(
                 memory_store=MemoryStore(
@@ -78,15 +86,20 @@ class SkillReviewer:
             {"role": "system", "content": SKILL_REVIEW_PROMPT},
             *_recent_turn_messages(messages_snapshot, self.review_turns),
         ]
+        review_start = len(sub_agent.messages)
         response = sub_agent.run(
             "List current skills, then audit recent conversation for reusable skill improvements. "
             "Use skill_lookup and skill_manage to create candidates, refine existing skills, merge overlaps, or prune support files. "
             "Only answer Nothing to save after listing skills and deciding no operation is useful."
         )
-        # print(f"[SkillReviewer] review result: {response}")  # DEBUG
+
+        tool_calls = _get_tool_calls(sub_agent.messages[review_start:])
+        tool_results = _get_tool_results(sub_agent.messages[review_start:])
+        summaries = _get_summaries(tool_calls, tool_results)
+
         return SkillReviewResult(
             response=response,
-            messages=list(sub_agent.messages),
+            summaries=summaries,
         )
 
 
@@ -113,3 +126,87 @@ def _recent_turn_messages(messages: list[dict], recent_turns: int) -> list[dict]
             continue
         selected.append(dict(message))
     return selected
+
+
+def _get_tool_calls(messages: list[dict]) -> list[dict]:
+    """从 messages 中提取所有工具调用记录"""
+    tool_call_records = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        tool_call_records.extend(tool_call for tool_call in tool_calls if isinstance(tool_call, dict))
+    return tool_call_records
+
+
+def _get_tool_results(messages: list[dict]) -> dict[str, dict]:
+    """从 messages 中提取所有工具调用结果
+
+    Returns:
+        dict[str, dict]: tool_call_id -> tool_result
+    """
+    tool_results = {}
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        content = message.get("content")
+        if not isinstance(tool_call_id, str) or not isinstance(content, str):
+            continue
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict) and result.get("ok") is True:
+            tool_results[tool_call_id] = result
+    return tool_results
+
+
+def _get_summaries(tool_calls: list[dict], tool_results: dict[str, dict]) -> list[str]:
+    """从 tool_calls 中提取已完成的 skill 操作, 并生成摘要"""
+    summaries = []
+    for tool_call in tool_calls:
+        tool_call_id = tool_call.get("id")
+        if tool_call_id not in tool_results or tool_call.get("function", {}).get("name") != "skill_manage":
+            continue
+
+        arguments = tool_call.get("function", {}).get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(arguments, dict):
+            continue
+        summary = _format_skill_change(arguments)
+        if summary:
+            summaries.append(summary)
+    return summaries
+
+
+def _format_skill_change(arguments: dict) -> str:
+    action = arguments.get("action")
+    name = arguments.get("name")
+    if not isinstance(name, str) or not name:
+        return ""
+    if action == "create":
+        return f"created skill {name}"
+    if action == "update":
+        return f"updated skill {name}"
+    if action == "patch":
+        return f"patched skill {name}"
+    if action == "write_file":
+        file_path = arguments.get("file_path")
+        return _format_skill_file_change("updated skill support file", name, file_path)
+    if action == "remove_file":
+        file_path = arguments.get("file_path")
+        return _format_skill_file_change("removed skill support file", name, file_path)
+    return ""
+
+
+def _format_skill_file_change(prefix: str, name: str, file_path) -> str:
+    if isinstance(file_path, str) and file_path:
+        return f"{prefix} {name}/{file_path}"
+    return f"{prefix} {name}"

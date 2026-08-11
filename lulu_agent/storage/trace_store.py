@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,10 +18,9 @@ class TraceStoreError(RuntimeError):
 class TraceStore:
     def __init__(self, root: Path | str = DEFAULT_TRACES_DIR):
         self.root = Path(root)
+        self._write_lock = threading.Lock()
 
     def append_event(self, session_id: str, event: RuntimeEvent) -> dict[str, Any]:
-        self._ensure_root()
-        path = self._trace_path(session_id)
         now = _local_now()
         record = {
             "type": "event",
@@ -32,10 +32,13 @@ class TraceStore:
             "payload": event.payload,
         }
 
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(record, ensure_ascii=False))
-            file.write("\n")
-            file.flush()
+        with self._write_lock:
+            self._ensure_root()
+            path = self._trace_path(session_id)
+            with path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, ensure_ascii=False))
+                file.write("\n")
+                file.flush()
 
         return record
 

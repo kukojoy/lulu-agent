@@ -18,6 +18,7 @@ class RuntimeEventType(StrEnum):
     APPROVAL_REQUEST = "approval_request"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    REVIEW_SUMMARY = "review_summary"
     TURN_END = "turn_end"
 
 
@@ -30,6 +31,7 @@ EVENT_ASSISTANT_MESSAGE = RuntimeEventType.ASSISTANT_MESSAGE
 EVENT_APPROVAL_REQUEST = RuntimeEventType.APPROVAL_REQUEST
 EVENT_TOOL_CALL = RuntimeEventType.TOOL_CALL
 EVENT_TOOL_RESULT = RuntimeEventType.TOOL_RESULT
+EVENT_REVIEW_SUMMARY = RuntimeEventType.REVIEW_SUMMARY
 EVENT_TURN_END = RuntimeEventType.TURN_END
 
 
@@ -133,6 +135,16 @@ class ToolResultPayload:
 
 
 @dataclass(frozen=True)
+class ReviewSummaryPayload:
+    reviewer: str
+    status: str
+    changed: bool | None
+    message: str
+    error_type: ErrorType | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True)
 class TurnEndPayload:
     status: str
     exit_reason: str
@@ -152,6 +164,7 @@ RuntimeEventPayload = (
     | ApprovalRequestPayload
     | ToolCallPayload
     | ToolResultPayload
+    | ReviewSummaryPayload
     | TurnEndPayload
 )
 
@@ -166,6 +179,7 @@ EVENT_PAYLOAD_MODELS: dict[str, type[RuntimeEventPayload]] = {
     EVENT_APPROVAL_REQUEST: ApprovalRequestPayload,
     EVENT_TOOL_CALL: ToolCallPayload,
     EVENT_TOOL_RESULT: ToolResultPayload,
+    EVENT_REVIEW_SUMMARY: ReviewSummaryPayload,
     EVENT_TURN_END: TurnEndPayload,
 }
 
@@ -174,6 +188,26 @@ class EventPayloadBuilder:
     @staticmethod
     def build_turn_start_payload() -> dict[str, Any]:
         return {}
+
+    @staticmethod
+    def build_review_summary_payload(
+        reviewer: str,
+        status: str,
+        changed: bool | None,
+        message: str,
+        error_type: ErrorType | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        return payload_to_dict(
+            ReviewSummaryPayload(
+                reviewer=reviewer,
+                status=status,
+                changed=changed,
+                message=message,
+                error_type=error_type,
+                error_message=error_message,
+            )
+        )
 
     @staticmethod
     def build_user_message_payload(content: str) -> dict[str, Any]:

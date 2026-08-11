@@ -14,6 +14,7 @@ from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_MESSAGE,
     EVENT_MODEL_REQUEST,
     EVENT_MODEL_RETRY,
+    EVENT_REVIEW_SUMMARY,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_TURN_END,
@@ -466,6 +467,7 @@ class AgentLoop:
         self.current_turn = None
         return turn_record
 
+    # === self-evolving: knowledge review ===
     def _review_knowledge(self, turn_record) -> None:
         """成功 turn 结束后启动后台 knowledge reviewers, 不污染主链路"""
         if turn_record.status != TurnStatus.COMPLETED or not turn_record.final_response:
@@ -490,11 +492,37 @@ class AgentLoop:
             setattr(self, counter, 0)
             messages_snapshot = [dict(message) for message in self.messages]
 
-            def target(reviewer=reviewer, messages_snapshot=messages_snapshot):
+            def target(reviewer=reviewer, messages_snapshot=messages_snapshot, llm_client=self.llm_client):
                 try:
-                    reviewer.review(messages_snapshot)
-                except Exception:
-                    pass
+                    review_result = reviewer.review(messages_snapshot, llm_client)
+                    review_summary_content = review_result.summary_content
+                    review_message = f"{reviewer.type} review completed: {review_summary_content}"
+                    self._emit(
+                        EVENT_REVIEW_SUMMARY,
+                        turn_record.turn_id,
+                        EventPayloadBuilder.build_review_summary_payload(
+                            reviewer=reviewer.type,
+                            status="completed",
+                            changed=review_result.changed,
+                            message=review_message
+                        )
+                    )
+                except Exception as exc:
+                    error_type = exc.error_type if isinstance(exc, LuluError) else None
+                    error_message = exc.error_message if isinstance(exc, LuluError) else str(exc)
+                    review_message = f"{reviewer.type} review failed: {error_message}"
+                    self._emit(
+                        EVENT_REVIEW_SUMMARY,
+                        turn_record.turn_id,
+                        EventPayloadBuilder.build_review_summary_payload(
+                            reviewer=reviewer.type,
+                            status="failed",
+                            changed=None,
+                            message=review_message,
+                            error_type=error_type,
+                            error_message=error_message
+                        )
+                    )
 
             threading.Thread(target=target, daemon=True, name=thread_name).start()
 

@@ -109,6 +109,25 @@ function tracePayloadValue(item: TraceTimelineItemView, key: string): unknown {
   return item.payload?.[key];
 }
 
+function traceReviewBadge(turn: TraceTurnView): { label: string; className: string; title: string } | null {
+  const reviewItems = turn.items.filter((item) => item.event_type === "review_summary");
+  if (reviewItems.length === 0) {
+    return null;
+  }
+  const reviewers = Array.from(
+    new Set(reviewItems.map((item) => String(tracePayloadValue(item, "reviewer") || "review"))),
+  );
+  const hasFailed = reviewItems.some((item) => tracePayloadValue(item, "status") === "failed");
+  const hasChanged = reviewItems.some((item) => tracePayloadValue(item, "changed") === true);
+  if (hasFailed) {
+    return { label: "review failed", className: "failed", title: reviewers.join(", ") };
+  }
+  if (hasChanged) {
+    return { label: "review updated", className: "changed", title: reviewers.join(", ") };
+  }
+  return { label: "reviewed", className: "done", title: reviewers.join(", ") };
+}
+
 function traceDetailFieldClass(field: TraceDetailField): string {
   return field.label === "error_type" ? "error-type" : "";
 }
@@ -160,6 +179,13 @@ function traceDetailFields(item: TraceTimelineItemView): TraceDetailField[] {
       { label: "exit_reason", value: String(tracePayloadValue(item, "exit_reason") ?? "-") },
     ];
   }
+  if (item.event_type === "review_summary") {
+    return [
+      { label: "reviewer", value: String(tracePayloadValue(item, "reviewer") ?? "-") },
+      { label: "status", value: String(tracePayloadValue(item, "status") ?? "-") },
+      { label: "changed", value: String(tracePayloadValue(item, "changed") ?? "-") },
+    ];
+  }
   return [];
 }
 
@@ -178,6 +204,9 @@ function traceDetailText(item: TraceTimelineItemView): string {
   }
   if (item.event_type === "turn_end") {
     return String(tracePayloadValue(item, "error") || "");
+  }
+  if (item.event_type === "review_summary") {
+    return String(tracePayloadValue(item, "message") || "");
   }
   if (
     item.event_type === "model_request" ||
@@ -1272,6 +1301,12 @@ export function App() {
           }
           return;
         }
+        if (event.type === "review_summary") {
+          window.setTimeout(() => {
+            refreshTraceTurns().catch((nextError) => setError(String(nextError)));
+          }, 100);
+          return;
+        }
         if (event.type === "assistant_message") {
           const toolCallCount = Number(event.payload.tool_call_count ?? 0);
           if (toolCallCount > 0) {
@@ -2103,6 +2138,7 @@ export function App() {
                     {traceTurns.map((turn) => {
                       const expanded = expandedTraceTurns.has(turn.turn_id);
                       const turnStatusClass = traceTurnStatusClass(turn);
+                      const reviewBadge = traceReviewBadge(turn);
                       return (
                         <section className={`trace-turn ${turnStatusClass}`} key={turn.turn_id}>
                           <button
@@ -2124,6 +2160,14 @@ export function App() {
                             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                             <strong>{turn.turn_id}</strong>
                             <span className={`trace-status ${turnStatusClass}`}>{turn.status || "running"}</span>
+                            {reviewBadge && (
+                              <span
+                                className={`trace-review-badge ${reviewBadge.className}`}
+                                title={reviewBadge.title}
+                              >
+                                {reviewBadge.label}
+                              </span>
+                            )}
                             {turn.error_type && <span className="trace-error-type">{turn.error_type}</span>}
                             <small>{turn.event_count} events</small>
                           </button>

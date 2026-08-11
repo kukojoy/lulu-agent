@@ -5,6 +5,7 @@ from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_MESSAGE,
     EVENT_MODEL_REQUEST,
     EVENT_MODEL_RETRY,
+    EVENT_REVIEW_SUMMARY,
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_TURN_END,
@@ -43,6 +44,8 @@ class TraceInteractionService:
             _update_turn_summary(turn, item)
             if item.get("event_type") != EVENT_ASSISTANT_DELTA:
                 turn["items"].append(item)
+        for turn in turns_by_id.values():
+            turn["items"].sort(key=lambda item: item.get("event_type") == EVENT_REVIEW_SUMMARY)
         return list(turns_by_id.values())
 
 
@@ -69,6 +72,7 @@ def _event_label(event_type: str | None) -> str:
         EVENT_ASSISTANT_MESSAGE: "Assistant message",
         EVENT_TOOL_CALL: "Tool call",
         EVENT_TOOL_RESULT: "Tool result",
+        EVENT_REVIEW_SUMMARY: "Review summary",
         EVENT_TURN_END: "Turn ended",
     }
     return labels.get(event_type, str(event_type or "unknown"))

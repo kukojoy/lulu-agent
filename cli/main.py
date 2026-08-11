@@ -109,8 +109,8 @@ def main(argv: list[str] | None = None):
 
     try:
         llm_client = LLMClient(build_model_config())
-        memory_reviewer = MemoryReviewer(llm_client=llm_client)
-        skill_reviewer = SkillReviewer(llm_client=llm_client)
+        memory_reviewer = MemoryReviewer()
+        skill_reviewer = SkillReviewer()
         agent, session_id = create_agent(
             args,
             session_store=store,
