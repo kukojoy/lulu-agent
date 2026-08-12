@@ -1,4 +1,5 @@
 import os
+import platform
 import time
 import threading
 
@@ -225,11 +226,17 @@ class AgentLoop:
         
         now = datetime.now().astimezone()
         timezone_name = now.tzname() or str(now.tzinfo or "local")
+        model_name = self.llm_client.get_model_config().to_dict().get('model')
         lines = [
             "Time:",
             f"- local_time: {now.isoformat(timespec='seconds')}",
             f"- timezone: {timezone_name}",
-            "- relative_time_basis: Resolve relative dates and times against local_time unless the user specifies another date, time, or timezone.",
+            "",
+            "System:",
+            f"- os: {platform.system() or 'unknown'}",
+            "",
+            "Model:",
+            f"- model: {model_name or 'unknown'}",
             "",
             "Session/Turn:",
             f"- session_id: {self.session_id or 'none'}",

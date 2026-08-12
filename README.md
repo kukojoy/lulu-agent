@@ -1,8 +1,8 @@
 # lulu-agent
 
-`lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI 和 CLI 两种入口，可以在本机完成对话、调用工具、读写文件、执行命令、维护长期记忆和复用技能。
+`lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI (推荐) 和 CLI 两种入口，可以在本机进行日常对话、读写文件、执行命令、维护长期记忆和复用技能等。
 
-当前状态：`v3.8 completed`。
+当前状态：`v4.0 in progress`。
 
 ## 主要能力
 
@@ -35,10 +35,8 @@ npm install
 
 ## 配置
 
-模型配置保存在全局用户目录 `~/.lulu/models.json`。每个 provider 直接填写
-OpenAI-compatible 服务地址、API key 和默认模型；暂不使用的 provider 可以先留空
-`base_url` 或 `api_key`，GUI 会显示但禁止选择：
-
+模型配置保存在全局用户目录 `~/.lulu/models.json`。每个 provider 直接填写 OpenAI-compatible 服务地址、API key 和默认模型
+暂不使用的 provider 可以先留空 `base_url` 或 `api_key`，GUI 会显示但禁止选择：
 ```json
 {
   "default_provider": "deepseek",
@@ -46,16 +44,15 @@ OpenAI-compatible 服务地址、API key 和默认模型；暂不使用的 provi
     "deepseek": {
       "base_url": "https://api.deepseek.com",
       "api_key": "your-api-key",
-      "default_model": "deepseek-chat"
+      "default_model": "deepseek-v4-flash"
     }
   }
 }
 ```
 
-模型服务需要兼容 OpenAI chat completion，并支持 tool calling。如果
-`default_model` 留空，GUI 会尝试从 provider 的 `/models` 接口读取候选模型。
-`.env` 只用于非模型配置，例如 `TAVILY_API_KEY`、模型请求超时/重试次数和
-safety profile。
+模型服务需要兼容 OpenAI chat completion，并支持 tool calling。如果 `default_model` 留空或不可用，GUI 会尝试从 provider 的 `/models` 接口读取候选模型。
+
+`.env` 用于其他非模型服务配置，例如 `TAVILY_API_KEY`、模型请求超时/重试次数和 safety profile。
 
 如果需要 web search / web extract，配置：
 
@@ -92,22 +89,20 @@ TAVILY_API_KEY=
 ./lulu.sh
 ```
 
-默认地址：
+Windows 可使用：
+
+```bat
+.\lulu.bat
+```
+
+默认起始地址：
 
 - 后端：`http://127.0.0.1:8000`
 - GUI：`http://127.0.0.1:5173`
 
-`lulu.sh` 会同时启动后端和 GUI，并在可用环境中自动打开浏览器。按 `Ctrl+C` 会停止两个进程。
+`lulu.sh` / `lulu.bat` 会同时启动后端和 GUI，等待后端 `/health` 与前端页面可用后再打开浏览器。按 `Ctrl+C` 会停止两个进程。
 
-可选环境变量：
-
-```bash
-LULU_BACKEND_HOST=127.0.0.1
-LULU_BACKEND_PORT=8000
-LULU_FRONTEND_PORT=5173
-LULU_CONDA_ENV=lulu-agent
-LULU_PYTHON=/path/to/python
-```
+启动脚本使用当前运行环境 (推荐使用 conda/uv/nvm) 中的 `python` / `python.exe` 和 `npm` / `npm.cmd`。如果默认端口已被占用，会自动尝试后续端口。
 
 ## 使用 CLI
 
@@ -164,10 +159,9 @@ python -m cli.main --inspect-context <session_id>
 ~/.lulu/
   memory/MEMORY.md
   skills/<name>/SKILL.md
+  models.json
   mcp.json
 ```
-
-`.lulu/` 是本地运行状态，不应提交到 Git。
 
 ## Memory
 

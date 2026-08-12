@@ -7,7 +7,6 @@
 3. 记忆存储层向上下文管理器提供记忆快照, 用于转换为 context block, 在每轮对话中提供记忆上下文
 """
 
-import fcntl
 import json
 
 from contextlib import contextmanager
@@ -17,6 +16,7 @@ from pathlib import Path
 
 from lulu_agent.memory.utils import truncate_memory_text
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
+from lulu_agent.runtime.file_lock import exclusive_file_lock
 
 
 DEFAULT_GLOBAL_MEMORY_PATH = Path.home() / ".lulu" / "memory" / "MEMORY.md"
@@ -375,8 +375,5 @@ class MemoryStore:
         lock_path = self.global_path.with_suffix(self.global_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
+            with exclusive_file_lock(lock_file):
                 yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

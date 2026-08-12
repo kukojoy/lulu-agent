@@ -221,6 +221,7 @@ class ServerRunner:
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
         metadata = self.session_service.delete_session(session_id)
+        self.trace_store.delete_session_trace(session_id)
         with self._lock:
             self._agents.pop(session_id, None)
             self._locks.pop(session_id, None)

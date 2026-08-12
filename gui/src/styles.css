@@ -122,7 +122,12 @@ button {
   gap: 12px;
 }
 
+.brand-row > div:first-child {
+  min-width: 0;
+}
+
 .toolbar-actions {
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -148,6 +153,14 @@ h2 {
 .muted,
 .task-block small {
   color: #697486;
+}
+
+.workspace-cwd {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .icon-button,
@@ -198,9 +211,9 @@ h2 {
 
 .session-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr) 30px;
   align-items: stretch;
-  gap: 6px;
+  gap: 3px;
   width: 100%;
   padding: 4px;
   border: 1px solid transparent;
@@ -244,8 +257,8 @@ h2 {
 .session-delete {
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   align-self: center;
   border: 1px solid transparent;
   border-radius: 7px;
@@ -291,12 +304,32 @@ h2 {
 
 .topbar > div:first-child {
   min-width: 0;
+  width: 100%;
+}
+
+.topbar-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
 }
 
 .topbar h2,
 .topbar p {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar h2 {
+  min-width: 0;
+}
+
+.topbar-title-row span {
+  flex: 0 0 auto;
+  color: #697486;
+  font-size: 16px;
   white-space: nowrap;
 }
 

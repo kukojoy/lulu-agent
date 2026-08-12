@@ -68,10 +68,6 @@ type ConnectionStatus = "draft" | "connecting" | "ready" | "reconnecting";
 
 const RUN_SOCKET_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000];
 
-function shortSessionId(sessionId: string): string {
-  return sessionId.replace(/^session-/, "");
-}
-
 function formatDetails(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
@@ -90,6 +86,10 @@ function formatTraceTimestamp(value?: string | null): string {
     pad(date.getMonth() + 1),
     pad(date.getDate()),
   ].join("-") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatDate(value?: string | null): string {
+  return formatTraceTimestamp(value).split(" ")[0];
 }
 
 type TraceTimelineItemView = TraceTurnView["items"][number];
@@ -1713,6 +1713,11 @@ export function App() {
                 </button>
               </div>
             </div>
+            {activeSession?.cwd && (
+              <p className="workspace-cwd" title={activeSession.cwd}>
+                {activeSession.cwd}
+              </p>
+            )}
             <button className="primary-button" type="button" onClick={handleCreateSession}>
               <MessageSquarePlus size={17} />
               New session
@@ -1732,7 +1737,7 @@ export function App() {
                       {session.active && <span className="session-active-dot" title="Agent loaded" />}
                       <span>{session.title || "(untitled)"}</span>
                     </span>
-                    <small>{shortSessionId(session.session_id)}</small>
+                    <small>Updated at: {formatDate(session.updated_at)}</small>
                   </button>
                   <button
                     className="session-delete"
@@ -1761,8 +1766,13 @@ export function App() {
       <section className="main-panel">
         <header className="topbar">
           <div>
-            <h2>{activeSession?.title || "New session"}</h2>
-            <p>{activeSessionId || "Session will be created on first message"}</p>
+            <div className="topbar-title-row">
+              <h2>{activeSession?.title || "New session"}</h2>
+              {activeSession?.created_at && (
+                <span>Created at: {formatTraceTimestamp(activeSession.created_at)}</span>
+              )}
+            </div>
+            {!activeSession?.created_at && <p>Session will be created on first message</p>}
           </div>
         </header>
 

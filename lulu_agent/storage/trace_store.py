@@ -62,6 +62,12 @@ class TraceStore:
             events.append(record)
         return events
 
+    def delete_session_trace(self, session_id: str) -> None:
+        path = self._trace_path(session_id)
+        with self._write_lock:
+            if path.exists():
+                path.unlink()
+
     def _ensure_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
 
