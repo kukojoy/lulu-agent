@@ -19,7 +19,6 @@ from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
 from lulu_agent.memory.review import MemoryReviewer
 from lulu_agent.skills.review import SkillReviewer
-from lulu_agent.skills.utils import install_bundled_skills
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -79,11 +78,6 @@ def create_agent(
 
 def main(argv: list[str] | None = None):
     setup_line_editing()
-    try:
-        install_bundled_skills()
-    except Exception as exc:
-        print(f"[Skill bootstrap warning] {exc}")
-        
     args = parse_args(argv)
     store = SessionStore()
     session_service = SessionInteractionService(store)

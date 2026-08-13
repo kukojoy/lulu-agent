@@ -1,0 +1,15 @@
+{
+  "default_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "",
+      "default_model": "deepseek-v4-flash"
+    },
+    "dashscope": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "",
+      "default_model": "qwen3.7-plus"
+    }
+  }
+}

@@ -29,10 +29,10 @@ class Config:
 
 def load_config() -> Config:
     config = Config(
-        model_timeout_seconds=os.getenv("LULU_MODEL_TIMEOUT_SECONDS") or 60.0,
-        model_max_retries=os.getenv("LULU_MODEL_MAX_RETRIES") or 3,
+        model_timeout_seconds=os.getenv("MODEL_TIMEOUT_SECONDS") or 60.0,
+        model_max_retries=os.getenv("MODEL_MAX_RETRIES") or 3,
         tavily_api_key=os.getenv("TAVILY_API_KEY") or "",
-        safety_profile=os.getenv("LULU_SAFETY_PROFILE") or DEFAULT_SAFETY_PROFILE,
+        safety_profile=os.getenv("SAFETY_PROFILE") or DEFAULT_SAFETY_PROFILE,
     )
     validate_config(config)
     return config
@@ -56,9 +56,9 @@ def _validate_model_timeout(value: float | str) -> float:
     try:
         timeout = float(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigError("LULU_MODEL_TIMEOUT_SECONDS must be a positive number.") from exc
+        raise ConfigError("MODEL_TIMEOUT_SECONDS must be a positive number.") from exc
     if timeout <= 0:
-        raise ConfigError("LULU_MODEL_TIMEOUT_SECONDS must be a positive number.")
+        raise ConfigError("MODEL_TIMEOUT_SECONDS must be a positive number.")
     return timeout
 
 
@@ -66,9 +66,9 @@ def _validate_model_max_retries(value: int | str) -> int:
     try:
         retries = int(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigError("LULU_MODEL_MAX_RETRIES must be a non-negative integer.") from exc
+        raise ConfigError("MODEL_MAX_RETRIES must be a non-negative integer.") from exc
     if isinstance(value, bool) or retries < 0:
-        raise ConfigError("LULU_MODEL_MAX_RETRIES must be a non-negative integer.")
+        raise ConfigError("MODEL_MAX_RETRIES must be a non-negative integer.")
     return retries
 
 

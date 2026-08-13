@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "demo": {
+      "enabled": false,
+      "command": "python",
+      "args": ["path/to/mcp_server.py"],
+      "env": {},
+      "timeout": 30,
+      "safety_profile": "trusted"
+    }
+  }
+}

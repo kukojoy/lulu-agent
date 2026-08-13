@@ -26,6 +26,14 @@
 pip install -r requirements.txt
 ```
 
+初始化全局 lulu 配置和内置 skill：
+
+```bash
+python setup/lulu_setup.py
+```
+
+首次使用前建议先运行这一步，确保 `~/.lulu/` 里的 `memory.md`、`skills`、`mcp.json` 和 `models.json` 都已准备好。
+
 如果使用 Web GUI，还需要安装 GUI 依赖：
 
 ```bash
@@ -50,11 +58,11 @@ npm install
 }
 ```
 
-模型服务需要兼容 OpenAI chat completion，并支持 tool calling。如果 `default_model` 留空或不可用，GUI 会尝试从 provider 的 `/models` 接口读取候选模型。
+模型服务需要兼容 OpenAI chat completion，并支持 tool calling。GUI 会尝试从 provider 拉取可用模型列表，若 `default_model` 留空时会自动切换，若已配置的 `default_model` 不可用也可手动切换。
 
-`.env` 用于其他非模型服务配置，例如 `TAVILY_API_KEY`、模型请求超时/重试次数和 safety profile。
+`.env` 只用于其他配置，例如 `TAVILY_API_KEY`、模型请求超时/重试次数和 safety profile。首次初始化后，模型配置、MCP 配置和内置 skill 分别位于 `~/.lulu/models.json`、`~/.lulu/mcp.json` 和 `~/.lulu/skills/`。当前环境变量名使用 `MODEL_TIMEOUT_SECONDS`、`MODEL_MAX_RETRIES` 和 `SAFETY_PROFILE`。
 
-如果需要 web search / web extract，配置：
+如果需要 web search / web extract，可从 tavily 官网免费申请 API key 并配置：
 
 ```bash
 TAVILY_API_KEY=
@@ -194,7 +202,7 @@ Skill 用来保存可复用的操作流程或工作方法。
 
 - agent 可以按需查看已有 skill。
 - 你可以要求 agent 创建或修改某个 skill。
-- 内置 skill 会在启动时安装到全局 skills 目录；已有同名 skill 不会被覆盖。
+- 运行 `python setup/lulu_setup.py` 会将内置 skill 安装到全局 skills 目录；已有同名 skill 不会被覆盖。
 - 后台 skill review 会周期性检查最近对话是否沉淀出可复用流程，结果写入 Trace，不进入聊天记录。
 
 ## MCP
