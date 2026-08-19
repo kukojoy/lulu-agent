@@ -10,6 +10,7 @@
 - CLI 入口，支持会话恢复、会话查看和 context inspect。
 - OpenAI-compatible 模型服务，支持 streaming 和 tool calling。
 - 本地 session 持久化，可以恢复历史会话。
+- 规范化 session transcript：内部使用 `Message` / `Turn` / `Compression` / `TaskState` 运行态模型，落盘统一使用 session record JSONL。
 - 本地文件工具：列文件、读文件、写文件、替换文件、全文搜索。
 - Shell 工具：执行本地命令，并对高风险命令做安全拦截或确认。
 - Web 工具：通过 Tavily 进行搜索和网页内容提取。
@@ -160,6 +161,14 @@ python -m cli.main --inspect-context <session_id>
   sessions/
   traces/
 ```
+
+session JSONL 每行使用统一 record envelope：
+
+```json
+{"type":"message","session_id":"session-...","created_at":"...","data":{}}
+```
+
+其中 `data` 是对应运行态模型的字典形式。发送给模型的请求上下文由 `ContextManager` 临时构造，会过滤 `turn_id` 等 session-only 字段；原始 session transcript 不会因为上下文压缩而被覆盖。
 
 跨项目长期数据保存在用户目录：
 

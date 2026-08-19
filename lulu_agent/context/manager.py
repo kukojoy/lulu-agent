@@ -21,7 +21,8 @@ from lulu_agent.context.inspection import ContextBlockInspection, ContextInspect
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.store import SkillStore
-from lulu_agent.runtime.compression import CompressionRecord
+from lulu_agent.runtime.compression import Compression
+from lulu_agent.runtime.message import Message
 
 
 class ContextManager:
@@ -47,12 +48,12 @@ class ContextManager:
 
     def prepare_messages(
         self,
-        messages: list[dict],
+        messages: list[Message],
         context_blocks: list[dict] | None = None,
     ) -> list[dict]:
         return self._build_api_messages(messages, context_blocks=context_blocks)
 
-    def plan_context(self, messages: list[dict]) -> ContextPlan:
+    def plan_context(self, messages: list[Message]) -> ContextPlan:
         turns = []
         compressions = []
         if self.session_store and self.session_id:
@@ -66,7 +67,7 @@ class ContextManager:
 
     def inspect_context(
         self,
-        messages: list[dict],
+        messages: list[Message],
         context_blocks: list[dict] | None = None,
     ) -> ContextInspection:
         """检查当前 API context 组成, 不修改原始 messages"""
@@ -88,7 +89,7 @@ class ContextManager:
                 continue
             raw_turn_ids.append(group.turn_id)
 
-        system_message = self._first_system_message(api_messages)
+        system_message = self._first_api_system_message(api_messages)
         system_content = system_message.get("content") if system_message else ""
         return ContextInspection(
             message_count=len(api_messages),
@@ -113,7 +114,7 @@ class ContextManager:
 
     def _build_api_messages(
         self,
-        messages: list[dict],
+        messages: list[Message],
         context_blocks: list[dict] | None = None,
     ) -> list[dict]:
         system_message = self._first_system_message(messages)
@@ -127,23 +128,30 @@ class ContextManager:
         api_messages = []
         if system_message:
             api_messages.append(system_message)
-        api_messages.extend(context_messages) # NOTE: 这些 messages 可能包含 turn_id 字段, 但不影响 LLM 请求
+        api_messages.extend(context_messages)
         return api_messages
 
-    def _first_system_message(self, messages: list[dict]) -> dict | None:
-        """获取 system msg (dict | None)"""
+    def _first_system_message(self, messages: list[Message]) -> Message | None:
+        """获取 system msg (Message | None)"""
+        for message in messages:
+            if message.role == "system":
+                return message
+        return None
+
+    def _first_api_system_message(self, messages: list[dict]) -> dict | None:
+        """获取 API system msg (dict | None)"""
         for message in messages:
             if message.get("role") == "system":
                 return message
         return None
 
-    def _non_system_messages(self, messages: list[dict]) -> list[dict]:
+    def _non_system_messages(self, messages: list[Message]) -> list[Message]:
         """获取非 system msg 列表"""
-        return [message for message in messages if message.get("role") != "system"]
+        return [message for message in messages if message.role != "system"]
 
     def _merge_context_blocks_into_system_message(
         self,
-        system_message: dict | None,
+        system_message: Message | None,
         context_blocks: list[dict] | None = None,
     ) -> dict | None:
         """将 context blocks 临时合并进 system msg
@@ -153,12 +161,12 @@ class ContextManager:
         """
         rendered_context = self._render_context_blocks(context_blocks)
         if not rendered_context:
-            return system_message
+            return system_message.for_request() if system_message else None
 
         if not system_message:
             return {"role": "system", "content": rendered_context}
 
-        merged = dict(system_message) # 浅拷贝, 避免修改原 system_message
+        merged = system_message.for_request()
         content = merged.get("content")
         if isinstance(content, str) and content.strip():
             merged["content"] = f"{content.rstrip()}\n\n{rendered_context}"
@@ -308,7 +316,7 @@ class ContextManager:
 
         return [{"name": "task_state", "content": "\n".join(lines)}]
 
-    def _build_turn_context_messages(self, non_system_messages: list[dict]) -> list[dict]:
+    def _build_turn_context_messages(self, non_system_messages: list[Message]) -> list[dict]:
         """按 turn 顺序组装压缩摘要和未压缩 raw messages"""
         groups = group_messages_by_turn(non_system_messages)
         compression_by_turn_id = self._compression_by_turn_id()
@@ -323,18 +331,18 @@ class ContextManager:
                     context_messages.append(self._compression_message(compression))
                     emitted_compression_ids.add(compression_id)
                 continue
-            context_messages.extend(group.messages)
+            context_messages.extend(message.for_request() for message in group.messages)
         return context_messages
 
-    def _compression_by_turn_id(self) -> dict[str, CompressionRecord]:
+    def _compression_by_turn_id(self) -> dict[str, Compression]:
         """获取每个 turn_id 对应的最新 compression record"""
-        result: dict[str, CompressionRecord] = {}
+        result: dict[str, Compression] = {}
         for compression in self._session_compressions():
             for turn_id in compression.covered_turn_ids:
                 result[turn_id] = compression # 新记录会覆盖旧记录
         return result
 
-    def _compression_message(self, compression: CompressionRecord) -> dict:
+    def _compression_message(self, compression: Compression) -> dict:
         """将 compression record 转成临时 api context message"""
         covered = ", ".join(compression.covered_turn_ids)
         lines = [
@@ -349,7 +357,7 @@ class ContextManager:
             "content": "\n".join(lines),
         }
 
-    def _session_compressions(self) -> list[CompressionRecord]:
+    def _session_compressions(self) -> list[Compression]:
         if not self.session_store or not self.session_id:
             return []
         return self.session_store.load_compressions(self.session_id)

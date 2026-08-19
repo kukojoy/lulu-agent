@@ -30,7 +30,7 @@ class TurnExitReason(StrEnum):
 
 
 @dataclass(frozen=True)
-class TurnRecord:
+class Turn:
     turn_id: str
     status: TurnStatus
     exit_reason: TurnExitReason
@@ -42,7 +42,7 @@ class TurnRecord:
     model_usage: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TurnRecord":
+    def from_dict(cls, data: dict[str, Any]) -> "Turn":
         return cls(
             turn_id=data["turn_id"],
             status=TurnStatus(data["status"]),
@@ -61,7 +61,7 @@ class TurnRecord:
             "status": self.status.value,
             "exit_reason": self.exit_reason.value,
             "error": self.error,
-            "error_type": self.error_type.value if self.error_type else None,
+            "error_type": self.error_type if self.error_type else None,
             "model_calls": self.model_calls,
             "tool_calls": self.tool_calls,
             "model_usage": list(self.model_usage),
@@ -141,7 +141,16 @@ class TurnRuntime:
         self.error = error
         self.error_type = error_type
 
-    def to_record(self, final_response: str = "") -> TurnRecord:
+    def error_exit_reason(self) -> TurnExitReason:
+        if self.status == TurnStatus.STREAMING_ASSISTANT:
+            return TurnExitReason.STREAM_ERROR
+        if self.status == TurnStatus.RUNNING_TOOL:
+            return TurnExitReason.TOOL_ERROR
+        if self.status == TurnStatus.REQUESTING_MODEL:
+            return TurnExitReason.MODEL_ERROR
+        return TurnExitReason.UNKNOWN_ERROR
+
+    def to_turn(self, final_response: str = "") -> Turn:
         if self.exit_reason is None:
             if self.status == TurnStatus.COMPLETED:
                 self.exit_reason = TurnExitReason.ASSISTANT_FINAL
@@ -154,7 +163,7 @@ class TurnRuntime:
                 self.exit_reason = TurnExitReason.UNKNOWN_ERROR
                 self.error = self.error or "Turn ended without an exit reason."
 
-        return TurnRecord(
+        return Turn(
             turn_id=self.turn_id,
             status=self.status,
             exit_reason=self.exit_reason,

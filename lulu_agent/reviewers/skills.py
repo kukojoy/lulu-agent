@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 
 from lulu_agent.context.manager import ContextManager
 from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.llm.client import LLMClient
+from lulu_agent.runtime.message import Message
+from lulu_agent.reviewers.base import BaseReviewer, BaseReviewResult, ReviewerType
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.tools import ToolRegistry
@@ -35,40 +36,23 @@ Skill quality rules:
 If no skill should be created, refined, merged, or pruned, answer exactly: Nothing to save."""
 
 
-@dataclass(frozen=True)
-class SkillReviewResult:
-    response: str
-    summaries: list[str] = field(default_factory=list)
-
-    @property
-    def changed(self) -> bool:
-        return bool(self.summaries)
-
-    @property
-    def summary_content(self) -> str:
-        if not self.summaries:
-            return "no changes"
-        shown = self.summaries[:3]
-        summary = "; ".join(shown)
-        remaining = len(self.summaries) - len(shown)
-        if remaining > 0:
-            summary = f"{summary}; and {remaining} more"
-        return summary
+class SkillReviewResult(BaseReviewResult):
+    pass
 
 
-class SkillReviewer:
+class SkillReviewer(BaseReviewer):
     def __init__(
         self,
         skill_store: SkillStore | None = None,
         max_turns: int = 20,
         review_turns: int = 8,
     ):
-        self.type = "skills"
+        self.type = ReviewerType.SKILLS
         self.skill_store = skill_store or SkillStore()
         self.max_turns = max_turns
         self.review_turns = review_turns
 
-    def review(self, messages_snapshot: list[dict], llm_client: LLMClient) -> SkillReviewResult:
+    def review(self, messages_snapshot: list[Message], llm_client: LLMClient) -> SkillReviewResult:
         """后台检查对话是否需要更新 skill, 不污染主链路 messages/session"""
         sub_agent = AgentLoop(
             llm_client=llm_client,
@@ -83,7 +67,7 @@ class SkillReviewer:
             max_turns=self.max_turns,
         )
         sub_agent.messages = [
-            {"role": "system", "content": SKILL_REVIEW_PROMPT},
+            Message(role="system", content=SKILL_REVIEW_PROMPT),
             *_recent_turn_messages(messages_snapshot, self.review_turns),
         ]
         review_start = len(sub_agent.messages)
@@ -93,8 +77,9 @@ class SkillReviewer:
             "Only answer Nothing to save after listing skills and deciding no operation is useful."
         )
 
-        tool_calls = _get_tool_calls(sub_agent.messages[review_start:])
-        tool_results = _get_tool_results(sub_agent.messages[review_start:])
+        review_messages = sub_agent.messages[review_start:]
+        tool_calls = _get_tool_calls(review_messages)
+        tool_results = _get_tool_results(review_messages)
         summaries = _get_summaries(tool_calls, tool_results)
 
         return SkillReviewResult(
@@ -110,38 +95,38 @@ def _skill_only_registry() -> ToolRegistry:
     return registry
 
 
-def _recent_turn_messages(messages: list[dict], recent_turns: int) -> list[dict]:
+def _recent_turn_messages(messages: list[Message], recent_turns: int) -> list[Message]:
     turn_ids = []
     for message in messages:
-        turn_id = message.get("turn_id")
+        turn_id = message.turn_id
         if turn_id and turn_id not in turn_ids:
             turn_ids.append(turn_id)
 
     selected_turn_ids = set(turn_ids[-recent_turns:])
     selected = []
     for message in messages:
-        if message.get("role") == "system":
+        if message.role == "system":
             continue
-        if selected_turn_ids and message.get("turn_id") not in selected_turn_ids:
+        if selected_turn_ids and message.turn_id not in selected_turn_ids:
             continue
-        selected.append(dict(message))
+        selected.append(message)
     return selected
 
 
-def _get_tool_calls(messages: list[dict]) -> list[dict]:
+def _get_tool_calls(messages: list[Message]) -> list[dict]:
     """从 messages 中提取所有工具调用记录"""
     tool_call_records = []
     for message in messages:
-        if message.get("role") != "assistant":
+        if message.role != "assistant":
             continue
-        tool_calls = message.get("tool_calls")
+        tool_calls = message.tool_calls
         if not isinstance(tool_calls, list):
             continue
         tool_call_records.extend(tool_call for tool_call in tool_calls if isinstance(tool_call, dict))
     return tool_call_records
 
 
-def _get_tool_results(messages: list[dict]) -> dict[str, dict]:
+def _get_tool_results(messages: list[Message]) -> dict[str, dict]:
     """从 messages 中提取所有工具调用结果
 
     Returns:
@@ -149,10 +134,10 @@ def _get_tool_results(messages: list[dict]) -> dict[str, dict]:
     """
     tool_results = {}
     for message in messages:
-        if message.get("role") != "tool":
+        if message.role != "tool":
             continue
-        tool_call_id = message.get("tool_call_id")
-        content = message.get("content")
+        tool_call_id = message.tool_call_id
+        content = message.content
         if not isinstance(tool_call_id, str) or not isinstance(content, str):
             continue
         try:

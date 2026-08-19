@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from lulu_agent.runtime.review import ReviewerType, ReviewStatus
 from lulu_agent.runtime.errors import ErrorType
 
 
@@ -136,8 +137,8 @@ class ToolResultPayload:
 
 @dataclass(frozen=True)
 class ReviewSummaryPayload:
-    reviewer: str
-    status: str
+    reviewer: ReviewerType
+    status: ReviewStatus
     changed: bool | None
     message: str
     error_type: ErrorType | None = None
@@ -191,8 +192,8 @@ class EventPayloadBuilder:
 
     @staticmethod
     def build_review_summary_payload(
-        reviewer: str,
-        status: str,
+        reviewer: ReviewerType,
+        status: ReviewStatus,
         changed: bool | None,
         message: str,
         error_type: ErrorType | None = None,
@@ -200,8 +201,8 @@ class EventPayloadBuilder:
     ) -> dict[str, Any]:
         return payload_to_dict(
             ReviewSummaryPayload(
-                reviewer=reviewer,
-                status=status,
+                reviewer=ReviewerType(reviewer),
+                status=ReviewStatus(status),
                 changed=changed,
                 message=message,
                 error_type=error_type,

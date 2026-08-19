@@ -7,7 +7,7 @@ Actions:
     - update: 更新当前任务状态, overwrite 选择覆盖完整状态/增量更新状态
 """
 
-from lulu_agent.runtime.task_state import TaskState
+from lulu_agent.runtime.task_state import TaskState, TaskStatus, TaskStepStatus
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolResult, tool
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
@@ -48,7 +48,7 @@ from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
                     "status": {
                         "type": "string",
                         "description": "Current task status.",
-                        "enum": ["active", "completed", "blocked", "cancelled"],
+                        "enum": [status.value for status in TaskStatus],
                     },
                     "steps": {
                         "type": "array",
@@ -68,13 +68,7 @@ from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
                                 "status": {
                                     "type": "string",
                                     "description": "Step status.",
-                                    "enum": [
-                                        "pending",
-                                        "in_progress",
-                                        "completed",
-                                        "blocked",
-                                        "cancelled",
-                                    ],
+                                    "enum": [status.value for status in TaskStepStatus],
                                 },
                             },
                             "required": ["id", "step", "status"],

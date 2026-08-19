@@ -17,8 +17,9 @@ from lulu_agent.runtime.event_sinks import CliEventSink, CompositeEventSink, Per
 from lulu_agent.safety.approval import use_approval_provider
 from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
-from lulu_agent.memory.review import MemoryReviewer
-from lulu_agent.skills.review import SkillReviewer
+from lulu_agent.reviewers.base import BaseReviewer
+from lulu_agent.reviewers.memory import MemoryReviewer
+from lulu_agent.reviewers.skills import SkillReviewer
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -50,8 +51,7 @@ def create_agent(
     args: argparse.Namespace,
     session_store: SessionStore | None = None,
     llm_client: LLMClient | None = None,
-    memory_reviewer: MemoryReviewer | None = None,
-    skill_reviewer: SkillReviewer | None = None,
+    reviewers: list[BaseReviewer] | None = None,
 ) -> tuple[AgentLoop, str]:
     store = session_store or SessionStore()
     session_service = SessionInteractionService(store)
@@ -71,8 +71,7 @@ def create_agent(
                 PersistentEventSink(TraceStore(), session_id),
             ]
         ),
-        memory_reviewer=memory_reviewer,
-        skill_reviewer=skill_reviewer,
+        reviewers=reviewers,
     ), session_id
 
 
@@ -103,14 +102,15 @@ def main(argv: list[str] | None = None):
 
     try:
         llm_client = LLMClient(build_model_config())
-        memory_reviewer = MemoryReviewer()
-        skill_reviewer = SkillReviewer()
+        reviewers: list[BaseReviewer] = [
+            MemoryReviewer(),
+            SkillReviewer(),
+        ]
         agent, session_id = create_agent(
             args,
             session_store=store,
             llm_client=llm_client,
-            memory_reviewer=memory_reviewer,
-            skill_reviewer=skill_reviewer,
+            reviewers=reviewers,
         )
     except ConfigError as exc:
         print(f"Config error: {exc}")

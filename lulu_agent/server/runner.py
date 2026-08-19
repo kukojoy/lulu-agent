@@ -20,9 +20,9 @@ from lulu_agent.safety.approval import ApprovalProvider, ApprovalRequest, use_ap
 from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
 from lulu_agent.runtime.events import EVENT_APPROVAL_REQUEST, EventPayloadBuilder, RuntimeEvent
 from lulu_agent.server.events import EventHub, HubEventSink
-from lulu_agent.memory.review import MemoryReviewer
+from lulu_agent.reviewers.memory import MemoryReviewer
+from lulu_agent.reviewers.skills import SkillReviewer
 from lulu_agent.skills.store import SkillStore
-from lulu_agent.skills.review import SkillReviewer
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.storage.trace_store import TraceStore
@@ -163,10 +163,10 @@ class ServerRunner:
                 f"MCP warning [{issue.source}]: {issue.issue_message}"
                 for issue in agent.tool_registry.get_issues()
             ]
-            current_turn = getattr(agent, "current_turn", None)
-            if current_turn is not None:
-                active_turn_id = current_turn.turn_id
-                status = getattr(current_turn.status, "value", current_turn.status)
+            turn_runtime = getattr(agent, "turn_runtime", None)
+            if turn_runtime is not None:
+                active_turn_id = turn_runtime.turn_id
+                status = getattr(turn_runtime.status, "value", turn_runtime.status)
         return {
             "session_id": session_id,
             "active": agent is not None,
@@ -343,8 +343,10 @@ class ServerRunner:
                             PersistentEventSink(self.trace_store, session_id),
                         ]
                     ),
-                    memory_reviewer=MemoryReviewer(memory_store=self.memory_store),
-                    skill_reviewer=SkillReviewer(skill_store=self.skill_store),
+                    reviewers=[
+                        MemoryReviewer(memory_store=self.memory_store),
+                        SkillReviewer(skill_store=self.skill_store),
+                    ],
                 )
                 self._agents[session_id] = agent
             return agent

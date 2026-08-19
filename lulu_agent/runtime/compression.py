@@ -11,9 +11,9 @@ class CompressionScope(StrEnum):
 
 
 @dataclass(frozen=True)
-class CompressionRecord:
+class Compression:
     compression_id: str
-    scope: CompressionScope | str
+    scope: CompressionScope
     covered_turn_ids: list[str] = field(default_factory=list)
     summary: str = ""
     source_prompt_chars: int = 0
@@ -22,11 +22,8 @@ class CompressionRecord:
     model: str = ""
     reason: str = ""
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "scope", CompressionScope(self.scope))
-
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CompressionRecord":
+    def from_dict(cls, data: dict[str, Any]) -> "Compression":
         return cls(
             compression_id=data["compression_id"],
             scope=CompressionScope(data["scope"]),

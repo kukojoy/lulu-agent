@@ -18,7 +18,7 @@ class SessionInteractionService:
 
     def load_messages(self, session_id: str) -> list[dict[str, Any]]:
         self.session_store.validate_session(session_id)
-        return self.session_store.load_messages(session_id)
+        return [message.to_dict() for message in self.session_store.load_messages(session_id)]
 
     def list_sessions(self, limit: int | None = 20) -> list[dict[str, Any]]:
         return self.session_store.list_sessions(limit=limit)

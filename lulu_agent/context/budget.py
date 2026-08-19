@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import StrEnum
+from lulu_agent.runtime.compression import Compression
+from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.turn import Turn
 
-from lulu_agent.runtime.compression import CompressionRecord
-from lulu_agent.runtime.turn import TurnRecord
 
-
-ContextCompressionAction = Literal[
-    "no_compression_needed",
-    "compress_needed",
-]
+class ContextCompressionAction(StrEnum):
+    NO_COMPRESSION_NEEDED = "no_compression_needed"
+    COMPRESS_NEEDED = "compress_needed"
 
 
 @dataclass(frozen=True)
@@ -38,7 +37,7 @@ class ContextBudget:
 @dataclass(frozen=True)
 class TurnMessageGroup:
     turn_id: str
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    messages: list[Message] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -65,9 +64,9 @@ class ContextPlanner:
 
     def plan(
         self,
-        messages: list[dict[str, Any]],
-        turns: list[TurnRecord] | None = None,
-        compressions: list[CompressionRecord] | None = None,
+        messages: list[Message],
+        turns: list[Turn] | None = None,
+        compressions: list[Compression] | None = None,
     ) -> ContextPlan:
         """根据消息, turns 和 compressions 生成 context 压缩计划
         
@@ -107,7 +106,7 @@ class ContextPlanner:
         # usage 缺失, 不压缩 (兜底)
         if latest_prompt_tokens is None:
             return self._plan(
-                action="no_compression_needed",
+                action=ContextCompressionAction.NO_COMPRESSION_NEEDED,
                 reason="missing_usage",
                 latest_prompt_tokens=latest_prompt_tokens,
                 compress_turn_ids=[],
@@ -117,7 +116,7 @@ class ContextPlanner:
         # usage < threshold, 不压缩
         if latest_prompt_tokens < threshold_tokens:
             return self._plan(
-                action="no_compression_needed",
+                action=ContextCompressionAction.NO_COMPRESSION_NEEDED,
                 reason="under_threshold",
                 latest_prompt_tokens=latest_prompt_tokens,
                 compress_turn_ids=[],
@@ -127,7 +126,7 @@ class ContextPlanner:
         # usage >= threshold, 且存在候选待压缩 turn
         if compress_turn_ids:
             return self._plan(
-                action="compress_needed",
+                action=ContextCompressionAction.COMPRESS_NEEDED,
                 reason="threshold_exceeded_consecutive" if should_compress_full_history else "threshold_exceeded",
                 latest_prompt_tokens=latest_prompt_tokens,
                 compress_turn_ids=compress_turn_ids,
@@ -135,7 +134,7 @@ class ContextPlanner:
             )
 
         return self._plan(
-            action="no_compression_needed",
+            action=ContextCompressionAction.NO_COMPRESSION_NEEDED,
             reason="no_old_turns",
             latest_prompt_tokens=latest_prompt_tokens,
             compress_turn_ids=[],
@@ -160,7 +159,7 @@ class ContextPlanner:
         )
 
 
-def group_messages_by_turn(messages: list[dict[str, Any]]) -> list[TurnMessageGroup]:
+def group_messages_by_turn(messages: list[Message]) -> list[TurnMessageGroup]:
     """按 turn_id 将消息分组
     
     Args:
@@ -173,9 +172,9 @@ def group_messages_by_turn(messages: list[dict[str, Any]]) -> list[TurnMessageGr
     groups: list[TurnMessageGroup] = []
 
     for message in messages:
-        if message.get("role") == "system":
+        if message.role == "system":
             continue
-        turn_id = message.get("turn_id")
+        turn_id = message.turn_id
         if not isinstance(turn_id, str) or not turn_id:
             raise RuntimeError("Non-system message must have a non-empty turn_id.")
         group = groups_by_id.get(turn_id)
@@ -188,11 +187,11 @@ def group_messages_by_turn(messages: list[dict[str, Any]]) -> list[TurnMessageGr
     return groups
 
 
-def latest_prompt_tokens_from_turns(turns: list[TurnRecord]) -> int | None:
+def latest_prompt_tokens_from_turns(turns: list[Turn]) -> int | None:
     """从最近的 turn 中获取最近一次 LLM 请求的 prompt_tokens
     
     Args:
-        turns (list[TurnRecord]): turns 列表
+        turns (list[Turn]): turns 列表
     Returns:
         int | None: 最新的 prompt_tokens 值
     """
@@ -204,7 +203,7 @@ def latest_prompt_tokens_from_turns(turns: list[TurnRecord]) -> int | None:
 
 
 def consecutive_prompt_exceeded_turn_count(
-    turns: list[TurnRecord],
+    turns: list[Turn],
     threshold_tokens: int,
 ) -> int:
     """从最新 turn 开始统计连续 prompt_tokens 超过阈值的 turn 数量"""
@@ -217,7 +216,7 @@ def consecutive_prompt_exceeded_turn_count(
     return count
 
 
-def covered_turn_ids(compressions: list[CompressionRecord]) -> set[str]:
+def covered_turn_ids(compressions: list[Compression]) -> set[str]:
     """获取已经被压缩过的 turn_id 集合"""
     covered: set[str] = set()
     for compression in compressions:

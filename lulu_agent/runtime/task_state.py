@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
 
-TaskStatus = Literal["active", "completed", "blocked", "cancelled"]
-TaskStepStatus = Literal["pending", "in_progress", "completed", "blocked", "cancelled"]
 
-TASK_STATUSES = {"active", "completed", "blocked", "cancelled"}
-TASK_STEP_STATUSES = {"pending", "in_progress", "completed", "blocked", "cancelled"}
+class TaskStatus(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+
+
+class TaskStepStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -26,15 +36,17 @@ class TaskStep:
             raise ValueError("task step id must be a positive integer.")
         if not isinstance(step, str) or not step.strip():
             raise ValueError("task step must be a non-empty string.")
-        if status not in TASK_STEP_STATUSES:
+        try:
+            parsed_status = TaskStepStatus(status)
+        except ValueError:
             raise ValueError("task step status is invalid.")
-        return cls(id=step_id, step=step.strip(), status=status)
+        return cls(id=step_id, step=step.strip(), status=parsed_status)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "step": self.step,
-            "status": self.status,
+            "status": self.status.value,
         }
 
 
@@ -54,7 +66,9 @@ class TaskState:
         status = data.get("status")
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError("task goal must be a non-empty string.")
-        if status not in TASK_STATUSES:
+        try:
+            parsed_status = TaskStatus(status)
+        except ValueError:
             raise ValueError("task status is invalid.")
 
         steps = data.get("steps", [])
@@ -78,13 +92,13 @@ class TaskState:
         step_ids = [step.id for step in parsed_steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError("task step ids must be unique.")
-        in_progress = [step for step in parsed_steps if step.status == "in_progress"]
+        in_progress = [step for step in parsed_steps if step.status == TaskStepStatus.IN_PROGRESS]
         if len(in_progress) > 1:
             raise ValueError("task state can have at most one in_progress step.")
 
         return cls(
             goal=goal.strip(),
-            status=status,
+            status=parsed_status,
             steps=parsed_steps,
             blockers=[item.strip() for item in blockers if item.strip()],
             verified=[item.strip() for item in verified if item.strip()],
@@ -94,7 +108,7 @@ class TaskState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "goal": self.goal,
-            "status": self.status,
+            "status": self.status.value,
             "steps": [step.to_dict() for step in self.steps],
             "blockers": list(self.blockers),
             "verified": list(self.verified),
@@ -102,4 +116,4 @@ class TaskState:
         }
 
     def should_inject(self) -> bool:
-        return self.status in {"active", "blocked"} and bool(self.goal or self.steps or self.next_action)
+        return self.status in {TaskStatus.ACTIVE, TaskStatus.BLOCKED} and bool(self.goal or self.steps or self.next_action)

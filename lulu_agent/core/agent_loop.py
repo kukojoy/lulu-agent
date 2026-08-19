@@ -26,10 +26,14 @@ from lulu_agent.runtime.events import (
 )
 from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
 from lulu_agent.runtime.errors import ERROR_APPROVAL_DENIED, LuluError
+from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.review import ReviewerType, ReviewStatus
 from lulu_agent.runtime.turn import TurnExitReason, TurnRuntime, TurnStatus
+
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 from lulu_agent.tools.runtime import ToolCall, ToolRuntime
+from lulu_agent.reviewers.base import BaseReviewer
 
 
 SYSTEM_PROMPT = """You are a local coding agent.
@@ -60,8 +64,7 @@ class AgentLoop:
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         event_sink: EventSink | None = None,
-        memory_reviewer=None,  # lulu_agent.memory.review.MemoryReviewer (NOTE: 此注释是为了防止循环 import)
-        skill_reviewer=None,  # lulu_agent.skills.review.SkillReviewer (NOTE: 此注释是为了防止循环 import)
+        reviewers: list[BaseReviewer] | None = None,
         max_turns: int = 30,
     ):
         self.llm_client = llm_client or LLMClient(build_model_config())
@@ -75,28 +78,27 @@ class AgentLoop:
             session_id=session_id,
         )
         self.event_sink = event_sink or NoopEventSink()
-        self.memory_reviewer = memory_reviewer
-        self.skill_reviewer = skill_reviewer
-        self._turns_since_memory_review = 0
-        self._turns_since_skill_review = 0
+        self.reviewers = reviewers or []
+        self._turns_since_review: dict[ReviewerType, int] = {}
         self.max_turns = max_turns
         self.messages = self._load_or_initialize_messages()
-        self.current_turn: TurnRuntime | None = None
+        self.turn_runtime: TurnRuntime | None = None
         self._interrupt_requested = threading.Event()
 
     def run(self, user_input: str) -> str:
         self._interrupt_requested.clear()
-        self.current_turn = TurnRuntime(turn_id=new_turn_id())
+        self.turn_runtime = TurnRuntime(turn_id=new_turn_id())
+        turn_runtime = self._active_turn()
 
         # === event emit ===
         self._emit(
             EVENT_TURN_START, 
-            self.current_turn.turn_id, 
+            turn_runtime.turn_id,
             EventPayloadBuilder.build_turn_start_payload()
         )
         self._emit(
             EVENT_USER_MESSAGE,
-            self.current_turn.turn_id,
+            turn_runtime.turn_id,
             EventPayloadBuilder.build_user_message_payload(user_input),
         )
         # === event emit ===
@@ -115,14 +117,14 @@ class AgentLoop:
                 tool_schemas = self.tool_registry.schemas()
 
                 # === event emit and turn state update ===
-                self.current_turn.start_model_request()
+                turn_runtime.start_model_request()
                 self._emit(
                     EVENT_MODEL_REQUEST,
-                    self.current_turn.turn_id,
+                    turn_runtime.turn_id,
                     EventPayloadBuilder.build_model_request_payload(
                         model=getattr(self.llm_client, "model", ""),
                         stream=True,
-                        request_index=self.current_turn.model_calls,
+                        request_index=turn_runtime.model_calls,
                         messages=request_messages,
                         tools=tool_schemas,
                     ),
@@ -137,10 +139,10 @@ class AgentLoop:
                 self._append_assistant_message(message)
 
                 # === event emit and turn state update ===
-                self.current_turn.record_model_usage(usage)
+                turn_runtime.record_model_usage(usage)
                 self._emit(
                     EVENT_ASSISTANT_MESSAGE,
-                    self.current_turn.turn_id,
+                    turn_runtime.turn_id,
                     EventPayloadBuilder.build_assistant_message_payload(
                         content=message.content or "",
                         tool_call_count=len(tool_calls),
@@ -154,7 +156,7 @@ class AgentLoop:
                 if not tool_calls:
                     
                     # === event emit and turn state update ===
-                    self.current_turn.complete(TurnExitReason.ASSISTANT_FINAL)
+                    turn_runtime.complete(TurnExitReason.ASSISTANT_FINAL)
                     result = self._finalize_turn(message.content or "")
                     # === event emit and turn state update ===
 
@@ -166,18 +168,18 @@ class AgentLoop:
                     self._append_tool_message(tool_message)
                     self._interrupt_checkpoint()
                     if not tool_result.ok and tool_result.error_type == ERROR_APPROVAL_DENIED:
-                        self.current_turn.interrupt(
+                        turn_runtime.interrupt(
                             APPROVAL_DENIED_MESSAGE,
                             reason=TurnExitReason.APPROVAL_DENIED,
                             error_type=ERROR_APPROVAL_DENIED,
                         )
-                        turn_result = self._finalize_turn(APPROVAL_DENIED_MESSAGE)
-                        return turn_result.final_response
+                        turn = self._finalize_turn(APPROVAL_DENIED_MESSAGE)
+                        return turn.final_response
 
             message = "Reached max turns before completing the task."
 
             # === event emit and turn state update ===
-            self.current_turn.fail(TurnExitReason.MAX_TURNS_EXHAUSTED, message)
+            turn_runtime.fail(TurnExitReason.MAX_TURNS_EXHAUSTED, message)
             result = self._finalize_turn(message)
             # === event emit and turn state update ===
 
@@ -185,13 +187,13 @@ class AgentLoop:
         except KeyboardInterrupt:
 
             # === event emit and turn state update ===
-            self.current_turn.interrupt(INTERRUPTED_MESSAGE)
-            result = self._finalize_turn(self.current_turn.error or INTERRUPTED_MESSAGE)
+            turn_runtime.interrupt(INTERRUPTED_MESSAGE)
+            result = self._finalize_turn(turn_runtime.error or INTERRUPTED_MESSAGE)
             # === event emit and turn state update ===
 
             return result.final_response
         except Exception as exc:
-            reason = self._error_exit_reason()
+            reason = turn_runtime.error_exit_reason()
 
             if isinstance(exc, LuluError):
                 error_message, error_type = exc.error_message, exc.error_type
@@ -199,7 +201,7 @@ class AgentLoop:
                 error_message, error_type = str(exc), None
 
             # === event emit and turn state update ===
-            self.current_turn.fail(reason, error_message, error_type=error_type)
+            turn_runtime.fail(reason, error_message, error_type=error_type)
             self._finalize_turn()
             # === event emit and turn state update ===
      
@@ -222,7 +224,7 @@ class AgentLoop:
 
     # === runtime 环境 context block 注入 ===  
     def _runtime_environment_context_block(self) -> dict:
-        turn = self._active_turn()
+        turn_runtime = self._active_turn()
         
         now = datetime.now().astimezone()
         timezone_name = now.tzname() or str(now.tzinfo or "local")
@@ -240,7 +242,7 @@ class AgentLoop:
             "",
             "Session/Turn:",
             f"- session_id: {self.session_id or 'none'}",
-            f"- turn_id: {turn.turn_id if turn else 'none'}",
+            f"- turn_id: {turn_runtime.turn_id if turn_runtime else 'none'}",
             "",
             "Workspace:",
             f"- cwd: {os.getcwd()}",
@@ -255,14 +257,14 @@ class AgentLoop:
         tool_schemas: list[dict],
     ):
         """请求 llm 消息, 支持流式响应 (默认) 和非流式响应"""
-        turn = self._active_turn()
+        turn_runtime = self._active_turn()
 
         def on_delta(content_delta: str) -> None:
             self._interrupt_checkpoint()
-            turn.start_streaming()
+            turn_runtime.start_streaming()
             self._emit(
                 EVENT_ASSISTANT_DELTA,
-                turn.turn_id,
+                turn_runtime.turn_id,
                 EventPayloadBuilder.build_assistant_delta_payload(content_delta),
             )
 
@@ -270,7 +272,7 @@ class AgentLoop:
             self._interrupt_checkpoint()
             self._emit(
                 EVENT_MODEL_RETRY,
-                turn.turn_id,
+                turn_runtime.turn_id,
                 EventPayloadBuilder.build_model_retry_payload(
                     attempt=retry["attempt"],
                     max_retries=retry["max_retries"],
@@ -293,7 +295,7 @@ class AgentLoop:
         return response.message, response.streamed, response.usage
 
     def request_interrupt(self) -> bool:
-        if self.current_turn is None:
+        if self.turn_runtime is None:
             return False
         self._interrupt_requested.set()
         return True
@@ -335,41 +337,45 @@ class AgentLoop:
             raise KeyboardInterrupt
 
     # === 消息加载/存储 ===
-    def _load_or_initialize_messages(self) -> list[dict]:
+    def _load_or_initialize_messages(self) -> list[Message]:
         if self.session_store and self.session_id:
             messages = self.session_store.load_messages(self.session_id)
             if messages:
                 return messages
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        system_message = Message(role="system", content=SYSTEM_PROMPT)
+        messages = [system_message]
         if self.session_store and self.session_id:
-            self.session_store.append_message(self.session_id, messages[0])
+            self.session_store.append_message(self.session_id, system_message)
         return messages
     
-    def _append_message(self, message: dict) -> None:
-        turn = self._active_turn()
-        
-        message["turn_id"] = turn.turn_id
+    def _append_message(self, message: Message) -> None:
+        turn_runtime = self._active_turn()
+        message = Message(
+            role=message.role,
+            content=message.content,
+            tool_calls=list(message.tool_calls),
+            tool_call_id=message.tool_call_id,
+            turn_id=turn_runtime.turn_id,
+        )
+
         self.messages.append(message)
         if self.session_store and self.session_id:
-            self.session_store.append_message(self.session_id, message, turn.turn_id)
+            self.session_store.append_message(self.session_id, message)
 
     # === 用户消息处理 ===
     def _append_user_message(self, content: str) -> None:
-        self._append_message({"role": "user", "content": content})
+        self._append_message(Message(role="user", content=content))
 
     # === AI 消息处理 ===
     def _append_assistant_message(self, message) -> None:
-        self._append_message(self._assistant_message_to_dict(message))
+        self._append_message(self._assistant_message_to_message(message))
 
-    def _assistant_message_to_dict(self, message) -> dict:
-        result = {
-            "role": "assistant",
-            "content": message.content,
-        }
+    def _assistant_message_to_message(self, message) -> Message:
+        tool_calls = []
 
         if message.tool_calls:
-            result["tool_calls"] = [
+            tool_calls = [
                 {
                     "id": tool_call.id,
                     "type": tool_call.type,
@@ -381,24 +387,24 @@ class AgentLoop:
                 for tool_call in message.tool_calls
             ]
 
-        return result
+        return Message(role="assistant", content=message.content, tool_calls=tool_calls)
 
     # === 工具消息处理 ===
-    def _append_tool_message(self, message: dict) -> None:
+    def _append_tool_message(self, message: Message) -> None:
         self._append_message(message)
 
     def _handle_tool_call(
         self,
         raw_tool_call,
-    ) -> tuple[dict, ToolResult]:
+    ) -> tuple[Message, ToolResult]:
         tool_call = self.tool_runtime.decode(raw_tool_call)
-        turn = self._active_turn()
+        turn_runtime = self._active_turn()
         
         # === event emit and turn state update ===
-        turn.start_tool(tool_call.tool_name)
+        turn_runtime.start_tool(tool_call.tool_name)
         self._emit(
             EVENT_TOOL_CALL,
-            turn.turn_id,
+            turn_runtime.turn_id,
             EventPayloadBuilder.build_tool_call_payload(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
@@ -416,7 +422,7 @@ class AgentLoop:
         # === event emit and turn state update ===
         self._emit(
             EVENT_TOOL_RESULT,
-            turn.turn_id,
+            turn_runtime.turn_id,
             EventPayloadBuilder.build_tool_result_payload(
                 tool_call_id=tool_call.tool_call_id,
                 tool_name=tool_call.tool_name,
@@ -428,14 +434,14 @@ class AgentLoop:
                 truncated=result.truncated,
             ),
         )
-        turn.finish_tool()
+        turn_runtime.finish_tool()
         # === event emit and turn state update ===
 
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call.tool_call_id,
-            "content": result.to_json(),
-        }, result
+        return Message(
+            role="tool",
+            tool_call_id=tool_call.tool_call_id,
+            content=result.to_json(),
+        ), result
 
     def _tool_call_with_runtime_args(self, tool_call: ToolCall) -> ToolCall:
         """必要时为特定工具添加 runtime 参数, 例如 session_store/session_id"""
@@ -453,51 +459,45 @@ class AgentLoop:
 
     # === turn runtime ===
     def _finalize_turn(self, final_response: str = ""):
-        turn = self._active_turn()
-        turn_record = turn.to_record(final_response)
+        turn_runtime = self._active_turn()
+        turn = turn_runtime.to_turn(final_response)
         if self.session_store and self.session_id:
-            self.session_store.append_turn(self.session_id, turn_record)
-        self._review_knowledge(turn_record)
+            self.session_store.append_turn(self.session_id, turn)
+        self._review_knowledge(turn)
         self._emit(
             EVENT_TURN_END,
-            turn.turn_id,
+            turn_runtime.turn_id,
             EventPayloadBuilder.build_turn_end_payload(
-                status=turn_record.status,
-                exit_reason=turn_record.exit_reason,
-                error=turn_record.error,
-                error_type=turn_record.error_type,
+                status=turn.status,
+                exit_reason=turn.exit_reason,
+                error=turn.error,
+                error_type=turn.error_type,
                 model_calls=turn.model_calls,
                 tool_calls=turn.tool_calls,
             ),
         )
         self._interrupt_requested.clear()
-        self.current_turn = None
-        return turn_record
+        self.turn_runtime = None
+        return turn
 
     # === self-evolving: knowledge review ===
-    def _review_knowledge(self, turn_record) -> None:
+    def _review_knowledge(self, turn) -> None:
         """成功 turn 结束后启动后台 knowledge reviewers, 不污染主链路"""
-        if turn_record.status != TurnStatus.COMPLETED or not turn_record.final_response:
+        if turn.status != TurnStatus.COMPLETED or not turn.final_response:
             return
 
-        reviewers = (
-            ("memory-review", self.memory_reviewer, "_turns_since_memory_review"),
-            ("skill-review", self.skill_reviewer, "_turns_since_skill_review"),
-        )
-
-        for thread_name, reviewer, counter in reviewers:
-            if not reviewer:
-                continue
+        for reviewer in self.reviewers:
             if reviewer.review_turns < 1:
                 continue
 
-            turns_since_review = getattr(self, counter) + 1
+            turns_since_review = self._turns_since_review.get(reviewer.type, 0) + 1
             if turns_since_review < reviewer.review_turns:
-                setattr(self, counter, turns_since_review)
+                self._turns_since_review[reviewer.type] = turns_since_review
                 continue
 
-            setattr(self, counter, 0)
-            messages_snapshot = [dict(message) for message in self.messages]
+            self._turns_since_review[reviewer.type] = 0
+            messages_snapshot = list(self.messages)
+            thread_name = f"{reviewer.type.value}-review"
 
             def target(reviewer=reviewer, messages_snapshot=messages_snapshot, llm_client=self.llm_client):
                 try:
@@ -506,10 +506,10 @@ class AgentLoop:
                     review_message = f"{reviewer.type} review completed: {review_summary_content}"
                     self._emit(
                         EVENT_REVIEW_SUMMARY,
-                        turn_record.turn_id,
+                        turn.turn_id,
                         EventPayloadBuilder.build_review_summary_payload(
                             reviewer=reviewer.type,
-                            status="completed",
+                            status=ReviewStatus.COMPLETED,
                             changed=review_result.changed,
                             message=review_message
                         )
@@ -520,10 +520,10 @@ class AgentLoop:
                     review_message = f"{reviewer.type} review failed: {error_message}"
                     self._emit(
                         EVENT_REVIEW_SUMMARY,
-                        turn_record.turn_id,
+                        turn.turn_id,
                         EventPayloadBuilder.build_review_summary_payload(
                             reviewer=reviewer.type,
-                            status="failed",
+                            status=ReviewStatus.FAILED,
                             changed=None,
                             message=review_message,
                             error_type=error_type,
@@ -533,20 +533,10 @@ class AgentLoop:
 
             threading.Thread(target=target, daemon=True, name=thread_name).start()
 
-    def _error_exit_reason(self):
-        turn = self._active_turn()
-        if turn.status == TurnStatus.STREAMING_ASSISTANT:
-            return TurnExitReason.STREAM_ERROR
-        if turn.status == TurnStatus.RUNNING_TOOL:
-            return TurnExitReason.TOOL_ERROR
-        if turn.status == TurnStatus.REQUESTING_MODEL:
-            return TurnExitReason.MODEL_ERROR
-        return TurnExitReason.UNKNOWN_ERROR
-
     def _active_turn(self) -> TurnRuntime:
-        if self.current_turn is None:
+        if self.turn_runtime is None:
             raise RuntimeError("AgentLoop has no active turn.")
-        return self.current_turn
+        return self.turn_runtime
 
     # === 事件发送 ===
     def _emit(self, event_type: str, turn_id: str, payload: dict) -> None:
