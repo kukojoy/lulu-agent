@@ -2,26 +2,24 @@ from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from lulu_agent.config import config
 from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.interaction import (
+    MemoryInteractionService,
+    ModelInteractionService,
     SessionInteractionService,
+    SkillInteractionService,
     TaskInteractionService,
     TraceInteractionService,
 )
 from lulu_agent.llm.client import LLMClient
-from lulu_agent.llm import providers as model_providers
 from lulu_agent.llm.response import LLMClientConfig
-from lulu_agent.safety.approval import ApprovalProvider, ApprovalRequest, use_approval_provider
-from lulu_agent.runtime.event_sinks import CompositeEventSink, PersistentEventSink
-from lulu_agent.runtime.events import EVENT_APPROVAL_REQUEST, EventPayloadBuilder, RuntimeEvent
-from lulu_agent.server.events import EventHub, HubEventSink
-from lulu_agent.reviewers.memory import MemoryReviewer
-from lulu_agent.reviewers.skills import SkillReviewer
+from lulu_agent.safety.approval import use_approval_provider
+from lulu_agent.server.agent_factory import build_server_agent
+from lulu_agent.server.approval import ServerApprovalProvider
+from lulu_agent.server.events import EventHub
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
@@ -32,80 +30,6 @@ class ServerRunnerError(RuntimeError):
     def __init__(self, message: str, code: str):
         super().__init__(message)
         self.code = code
-
-
-class ServerApprovalProvider(ApprovalProvider):
-    def __init__(self, event_hub: EventHub, session_id: str, timeout_seconds: int = 300):
-        self.event_hub = event_hub
-        self.session_id = session_id
-        self.timeout_seconds = timeout_seconds
-        self._lock = threading.Lock()
-        self._pending: dict[str, queue.Queue[bool]] = {}
-        self._requests: dict[str, ApprovalRequest] = {}
-
-    def request_approval(self, request: ApprovalRequest) -> bool:
-        response_queue: queue.Queue[bool] = queue.Queue(maxsize=1)
-        with self._lock:
-            self._pending[request.request_id] = response_queue
-            self._requests[request.request_id] = request
-
-        self.event_hub.publish(
-            self.session_id,
-            RuntimeEvent(
-                type=EVENT_APPROVAL_REQUEST,
-                turn_id="",
-                payload=EventPayloadBuilder.build_approval_request_payload(
-                    request_id=request.request_id,
-                    category=request.category,
-                    reason=request.reason,
-                    subject=request.subject,
-                ),
-            ),
-        )
-
-        try:
-            return response_queue.get(timeout=self.timeout_seconds)
-        except queue.Empty:
-            return False
-        finally:
-            with self._lock:
-                self._pending.pop(request.request_id, None)
-                self._requests.pop(request.request_id, None)
-
-    def resolve(self, request_id: str, approved: bool) -> bool:
-        with self._lock:
-            response_queue = self._pending.get(request_id)
-        if response_queue is None:
-            return False
-        try:
-            response_queue.put_nowait(bool(approved))
-        except queue.Full:
-            return False
-        return True
-
-    def cancel_pending(self) -> int:
-        with self._lock:
-            queues = list(self._pending.values())
-        cancelled = 0
-        for response_queue in queues:
-            try:
-                response_queue.put_nowait(False)
-                cancelled += 1
-            except queue.Full:
-                continue
-        return cancelled
-
-    def pending_request(self) -> dict[str, str] | None:
-        with self._lock:
-            request = next(iter(self._requests.values()), None)
-        if request is None:
-            return None
-        return {
-            "request_id": request.request_id,
-            "category": request.category,
-            "reason": request.reason,
-            "subject": request.subject,
-        }
 
 
 class ServerRunner:
@@ -122,7 +46,10 @@ class ServerRunner:
         self.memory_store = memory_store or MemoryStore()
         self.skill_store = skill_store or SkillStore()
         self.event_hub = event_hub or EventHub()
+        self.memory_service = MemoryInteractionService(self.memory_store)
+        self.model_service = ModelInteractionService()
         self.session_service = SessionInteractionService(self.session_store)
+        self.skill_service = SkillInteractionService(self.skill_store)
         self.task_service = TaskInteractionService(self.session_store)
         self.trace_service = TraceInteractionService(self.trace_store)
         self._agents: dict[str, AgentLoop] = {}
@@ -179,7 +106,7 @@ class ServerRunner:
         }
 
     def get_model_config(self) -> dict[str, Any]:
-        return LLMClient(model_providers.build_model_config()).get_model_config().to_dict()
+        return self.model_service.get_model_config()
 
     def get_session_model_config(self, session_id: str) -> dict[str, Any]:
         self.session_service.resume_session(session_id)
@@ -188,15 +115,15 @@ class ServerRunner:
             pending_config = self._session_model_configs.get(session_id)
         if agent is None:
             if pending_config is not None:
-                return LLMClient(pending_config).get_model_config().to_dict()
+                return self.model_service.config_view(pending_config)
             return self.get_model_config()
         return agent.llm_client.get_model_config().to_dict()
 
     def list_model_providers(self) -> list[dict[str, Any]]:
-        return [provider.to_dict() for provider in model_providers.list_model_providers()]
+        return self.model_service.list_model_providers()
 
     def list_provider_models(self, provider: str) -> dict[str, Any]:
-        return model_providers.discover_provider_models(provider).to_dict()
+        return self.model_service.list_provider_models(provider)
 
     def update_session_model(self, session_id: str, provider: str, model: str) -> dict[str, Any]:
         self.session_service.resume_session(session_id)
@@ -206,11 +133,11 @@ class ServerRunner:
         try:
             with self._lock:
                 agent = self._agents.get(session_id)
-            next_config = model_providers.build_model_config(provider, model)
+            next_config = self.model_service.build_model_config(provider, model)
             if agent is None:
                 with self._lock:
                     self._session_model_configs[session_id] = next_config
-                return LLMClient(next_config).get_model_config().to_dict()
+                return self.model_service.config_view(next_config)
             llm_client = LLMClient(next_config)
             agent.set_llm_client(llm_client)
             with self._lock:
@@ -256,19 +183,13 @@ class ServerRunner:
         return self.trace_service.build_turns(session_id)
 
     def get_memory(self) -> dict[str, Any]:
-        return self.memory_store.read()
+        return self.memory_service.get_memory()
 
     def list_skills(self) -> dict[str, Any]:
-        result = self.skill_store.list_skills()
-        return {
-            "root": result.root,
-            "skills": [asdict(skill) for skill in result.skills],
-            "load_issues": [asdict(issue) for issue in result.load_issues],
-        }
+        return self.skill_service.list_skills()
 
     def read_skill(self, name: str) -> dict[str, Any]:
-        result = self.skill_store.read_skill(name)
-        return result.to_dict(("name", "description", "path", "directory", "content"))
+        return self.skill_service.read_skill(name)
 
     def list_mcp_tools(self, session_id: str) -> dict[str, Any]:
         self.session_service.resume_session(session_id)
@@ -332,21 +253,15 @@ class ServerRunner:
             if agent is None:
                 model_config = self._session_model_configs.get(session_id)
                 if model_config is None:
-                    model_config = model_providers.build_model_config()
-                agent = AgentLoop(
+                    model_config = self.model_service.build_model_config()
+                agent = build_server_agent(
                     session_store=self.session_store,
+                    trace_store=self.trace_store,
+                    memory_store=self.memory_store,
+                    skill_store=self.skill_store,
+                    event_hub=self.event_hub,
                     session_id=session_id,
-                    llm_client=LLMClient(model_config),
-                    event_sink=CompositeEventSink(
-                        [
-                            HubEventSink(self.event_hub, session_id),
-                            PersistentEventSink(self.trace_store, session_id),
-                        ]
-                    ),
-                    reviewers=[
-                        MemoryReviewer(memory_store=self.memory_store),
-                        SkillReviewer(skill_store=self.skill_store),
-                    ],
+                    model_config=model_config,
                 )
                 self._agents[session_id] = agent
             return agent

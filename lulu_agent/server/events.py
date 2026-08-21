@@ -51,3 +51,38 @@ class HubEventSink(EventSink):
 
     def emit(self, event: RuntimeEvent) -> None:
         self.hub.publish(self.session_id, event)
+
+
+def build_server_ready_event(session_id: str, runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "server_ready",
+        "turn_id": "",
+        "timestamp": "",
+        "payload": {
+            "session_id": session_id,
+            "runtime": runtime,
+        },
+    }
+
+
+def build_server_error_event(
+    message: str,
+    code: str,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"message": message, "code": code}
+    if runtime is not None:
+        payload["runtime"] = runtime
+    return {
+        "type": "server_error",
+        "turn_id": "",
+        "timestamp": "",
+        "payload": payload,
+    }
+
+
+def publish_queue_message(subscriber: queue.Queue[dict[str, Any]], message: dict[str, Any]) -> None:
+    try:
+        subscriber.put_nowait(message)
+    except queue.Full:
+        pass
