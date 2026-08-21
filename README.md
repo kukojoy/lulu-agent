@@ -168,7 +168,7 @@ session JSONL 每行使用统一 record envelope：
 {"type":"message","session_id":"session-...","created_at":"...","data":{}}
 ```
 
-其中 `data` 是对应运行态模型的字典形式。发送给模型的请求上下文由 `ContextManager` 临时构造，会过滤 `turn_id` 等 session-only 字段；原始 session transcript 不会因为上下文压缩而被覆盖。
+其中 `data` 是对应运行态模型的字典形式。发送给模型的请求上下文由 `ContextManager` 临时构造为 `Message` 列表，并在 `AgentLoop` 请求边界通过 `Message.for_request()` 过滤 `turn_id` 等 session-only 字段；原始 session transcript 不会因为上下文压缩而被覆盖。
 
 跨项目长期数据保存在用户目录：
 

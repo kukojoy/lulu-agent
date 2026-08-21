@@ -1,11 +1,11 @@
 import json
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from lulu_agent.runtime.events import RuntimeEvent
-from lulu_agent.storage.jsonl import parse_jsonl_record
+from lulu_agent.runtime.utils import get_local_time
+from lulu_agent.storage.utils import is_safe_session_id, parse_jsonl_record
 
 
 DEFAULT_TRACES_DIR = Path(".lulu") / "traces"
@@ -21,7 +21,7 @@ class TraceStore:
         self._write_lock = threading.Lock()
 
     def append_event(self, session_id: str, event: RuntimeEvent) -> dict[str, Any]:
-        now = _local_now()
+        now = get_local_time()
         record = {
             "type": "event",
             "session_id": session_id,
@@ -72,13 +72,9 @@ class TraceStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _trace_path(self, session_id: str) -> Path:
-        if not _is_safe_session_id(session_id):
+        if not is_safe_session_id(session_id):
             raise TraceStoreError(f"Invalid session id: {session_id}")
         return self.root / f"{session_id}.jsonl"
-
-
-def _local_now() -> datetime:
-    return datetime.now().astimezone()
 
 
 def _validate_trace_record(
@@ -107,9 +103,3 @@ def _validate_trace_record(
         raise TraceStoreError(
             f"Invalid trace record at {path}:{line_number}: payload must be an object."
         )
-
-
-def _is_safe_session_id(session_id: str) -> bool:
-    return bool(session_id) and all(
-        char.isalnum() or char in {"-", "_"} for char in session_id
-    )

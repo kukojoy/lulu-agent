@@ -1,15 +1,17 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
-from lulu_agent.runtime.compression import Compression
-from lulu_agent.runtime.message import Message
-from lulu_agent.runtime.task_state import TaskState
-from lulu_agent.runtime.turn import Turn
+from lulu_agent.runtime.session.compression import Compression
+from lulu_agent.runtime.session.message import Message
+from lulu_agent.runtime.session.model import SessionRuntimeModel
+from lulu_agent.runtime.session.task_state import TaskState
+from lulu_agent.runtime.session.turn import Turn
+from lulu_agent.runtime.utils import get_local_time
 from lulu_agent.storage.session_record import SessionRecord, SessionRecordType
-from lulu_agent.storage.jsonl import parse_jsonl_record
+from lulu_agent.storage.utils import is_safe_session_id, parse_jsonl_record
 
 
 DEFAULT_SESSIONS_DIR = Path(".lulu") / "sessions"
@@ -17,6 +19,7 @@ SESSION_INDEX_FILENAME = "sessions_index.jsonl"
 TITLE_MAX_CHARS = 60
 TURN_SUMMARY_MAX_RESPONSE_CHARS = 240
 COMPRESSION_SUMMARY_MAX_CHARS = 500
+T = TypeVar("T", bound=SessionRuntimeModel)
 
 
 class SessionStoreError(RuntimeError):
@@ -35,7 +38,7 @@ class SessionStore:
             dict[str, Any]: session metadata
         """
         self._ensure_root()
-        now = _local_now()
+        now = get_local_time()
         session_id = _new_session_id(now)
         metadata = {
             "session_id": session_id,
@@ -49,30 +52,18 @@ class SessionStore:
         self.append_index(metadata)
         return metadata
 
-    def append_message(
-        self,
-        session_id: str,
-        message: Message,
-    ) -> dict[str, Any]:
-        """向指定 session 追加一条消息, 并更新 session metadata
-        
-        Returns:
-            dict[str, Any]: 更新后的 session metadata
-        """
+    def append_record(self, record: SessionRecord) -> dict[str, Any]:
+        """向指定 session 追加一条 record, 并更新 session metadata"""
         self._ensure_root()
-        path = self._existing_session_path(session_id)
-        now = _local_now()
-        record = SessionRecord.from_message(session_id, now.isoformat(), message)
-        metadata = self._metadata_for_append(session_id, record.data, now)
+        path = self._existing_session_path(record.session_id)
+        metadata = self._metadata_for_record_append(record)
 
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record.to_dict(), ensure_ascii=False))
             file.write("\n")
             file.flush()
 
-        # metadata 构造成功且消息写入成功后, 再将 metadata 写入 index 文件
         self.append_index(metadata)
-
         return metadata
 
     def append_index(self, metadata: dict[str, Any]) -> None:
@@ -89,147 +80,19 @@ class SessionStore:
         Returns:
             list[Message]: session id 对应的消息列表
         """
-        path = self._existing_session_path(session_id)
-        messages: list[Message] = []
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            raw_record = parse_jsonl_record(path, line_number, line)
-            record = SessionRecord.from_dict(raw_record)
-            if record.type != SessionRecordType.MESSAGE:
-                continue
-            if record.session_id != session_id:
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
-                )
-            if not isinstance(record.data, dict):
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: message must be an object."
-                )
-            messages.append(record.to_message())
-        return messages
-
-    def append_turn(self, session_id: str, turn: Turn) -> dict[str, Any]:
-        """向指定 session 追加一条 turn 摘要, 并更新 session metadata"""
-        self._ensure_root()
-        path = self._existing_session_path(session_id)
-        now = _local_now()
-        metadata = self._get_latest_metadata_for_session(session_id)
-        metadata["updated_at"] = now.isoformat()
-        record = SessionRecord.from_turn(session_id, now.isoformat(), turn)
-
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(record.to_dict(), ensure_ascii=False))
-            file.write("\n")
-            file.flush()
-
-        self.append_index(metadata)
-        return metadata
+        return self._load_records(session_id=session_id, model_cls=Message)
 
     def load_turns(self, session_id: str) -> list[Turn]:
         """加载指定 session 的所有 turn 摘要"""
-        path = self._existing_session_path(session_id)
-        turns: list[Turn] = []
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            raw_record = parse_jsonl_record(path, line_number, line)
-            record = SessionRecord.from_dict(raw_record)
-            if record.type != SessionRecordType.TURN:
-                continue
-            if record.session_id != session_id:
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
-                )
-            if not isinstance(record.data, dict):
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: turn must be an object."
-                )
-            turns.append(record.to_turn())
-        return turns
-
-    def append_compression(self, session_id: str, compression: Compression) -> dict[str, Any]:
-        """向指定 session 追加一条 compression 记录, 并更新 session metadata"""
-        self._ensure_root()
-        path = self._existing_session_path(session_id)
-        now = _local_now()
-        metadata = self._get_latest_metadata_for_session(session_id)
-        metadata["updated_at"] = now.isoformat()
-        record = SessionRecord.from_compression(session_id, now.isoformat(), compression)
-
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(record.to_dict(), ensure_ascii=False))
-            file.write("\n")
-            file.flush()
-
-        self.append_index(metadata)
-        return metadata
+        return self._load_records(session_id=session_id, model_cls=Turn)
 
     def load_compressions(self, session_id: str) -> list[Compression]:
         """加载指定 session 的所有 compression 记录"""
-        path = self._existing_session_path(session_id)
-        compressions: list[Compression] = []
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            raw_record = parse_jsonl_record(path, line_number, line)
-            record = SessionRecord.from_dict(raw_record)
-            if record.type != SessionRecordType.COMPRESSION:
-                continue
-            if record.session_id != session_id:
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
-                )
-            if not isinstance(record.data, dict):
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: compression must be an object."
-                )
-            compressions.append(record.to_compression())
-        return compressions
-
-    def append_task_state(self, session_id: str, task_state: TaskState) -> dict[str, Any]:
-        """向指定 session 追加一条 task state 记录, 并更新 session metadata"""
-        self._ensure_root()
-        path = self._existing_session_path(session_id)
-        now = _local_now()
-        metadata = self._get_latest_metadata_for_session(session_id)
-        metadata["updated_at"] = now.isoformat()
-        record = SessionRecord.from_task_state(session_id, now.isoformat(), task_state)
-
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(record.to_dict(), ensure_ascii=False))
-            file.write("\n")
-            file.flush()
-
-        self.append_index(metadata)
-        return metadata
+        return self._load_records(session_id=session_id, model_cls=Compression)
 
     def load_task_states(self, session_id: str) -> list[TaskState]:
         """加载指定 session 的所有 task state 记录"""
-        path = self._existing_session_path(session_id)
-        task_states: list[TaskState] = []
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            raw_record = parse_jsonl_record(path, line_number, line)
-            record = SessionRecord.from_dict(raw_record)
-            if record.type != SessionRecordType.TASK_STATE:
-                continue
-            if record.session_id != session_id:
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
-                )
-            if not isinstance(record.data, dict):
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: task_state must be an object."
-                )
-            try:
-                task_states.append(record.to_task_state())
-            except ValueError as exc:
-                raise SessionStoreError(
-                    f"Invalid session record at {path}:{line_number}: {exc}"
-                ) from exc
-        return task_states
+        return self._load_records(session_id=session_id, model_cls=TaskState)
 
     def load_latest_task_state(self, session_id: str) -> TaskState | None:
         """加载指定 session 的最新 task state"""
@@ -301,30 +164,47 @@ class SessionStore:
             "compressions": [compression.to_dict() for compression in compressions[-10:]],
         }
 
-    def _metadata_for_append(
+    def _metadata_for_record_append(
+        self,
+        record: SessionRecord,
+    ) -> dict[str, Any]:
+        metadata = self._get_latest_metadata_for_session(record.session_id)
+        metadata["updated_at"] = get_local_time().isoformat()
+        if record.type == SessionRecordType.MESSAGE:
+            metadata["message_count"] = int(metadata.get("message_count") or 0) + 1
+            title = _title_from_message(record.data)
+            if title and not metadata.get("title"):
+                metadata["title"] = title
+        return metadata
+
+    def _load_records(
         self,
         session_id: str,
-        message: dict[str, Any],
-        updated_at: datetime,
-    ) -> dict[str, Any]:
-        """生成追加会话消息所需的 metadata, 包括更新 updated_at 和 message_count 字段, 以及根据消息内容生成 title (如果还未生成)
-        
-        Returns:
-            dict[str, Any]: 更新后的 session metadata
-        """
-        metadata = self._get_latest_metadata_for_session(session_id)
+        model_cls: type[T],
+    ) -> list[T]:
+        path = self._existing_session_path(session_id)
+        records: list[T] = []
+        expected_type = model_cls.type
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            raw_record = parse_jsonl_record(path, line_number, line)
+            try:
+                record = SessionRecord.from_dict(raw_record)
+            except ValueError as exc:
+                raise SessionStoreError(f"Invalid session record at {path}:{line_number}: {exc}") from exc
+            if record.type != expected_type:
+                continue
+            if record.session_id != session_id:
+                raise SessionStoreError(
+                    f"Invalid session record at {path}:{line_number}: session_id mismatch."
+                )
 
-        # 更新 updated_at 和 message_count 字段
-        metadata["updated_at"] = updated_at.isoformat()
-        metadata["message_count"] = int(metadata.get("message_count") or 0) + 1
-        
-        # 根据消息内容, 为 session 生成 title (如果之前没有的话)
-        if not metadata.get("title"):
-            title = _title_from_message(message)
-            if title:
-                metadata["title"] = title
-
-        return metadata
+            try:
+                records.append(model_cls.from_record(record))
+            except ValueError as exc:
+                raise SessionStoreError(f"Invalid session record at {path}:{line_number}: {exc}") from exc
+        return records
 
     def _get_latest_metadata_for_session(self, session_id: str) -> dict[str, Any]:
         """获取指定 session 的最新 metadata"""
@@ -393,7 +273,7 @@ class SessionStore:
 
     def _session_path(self, session_id: str) -> Path:
         """构造 session id path"""
-        if not _is_safe_session_id(session_id):
+        if not is_safe_session_id(session_id):
             raise SessionStoreError(f"Invalid session id: {session_id}")
         return self.root / f"{session_id}.jsonl"
 
@@ -405,22 +285,10 @@ class SessionStore:
         return path
 
 
-def _local_now() -> datetime:
-    """获取当前本地时间"""
-    return datetime.now().astimezone()
-
-
 def _new_session_id(created_at: datetime) -> str:
     """获取一个新的 session id, 格式: session-YYYYMMDD-HHMMSS-XXXXXXXX"""
     timestamp = created_at.strftime("%Y%m%d-%H%M%S")
     return f"session-{timestamp}-{uuid4().hex[:8]}"
-
-
-def _is_safe_session_id(session_id: str) -> bool:
-    """检查 session id 是否合法 (仅包含字母, 数字, - 和 _)"""
-    return bool(session_id) and all(
-        char.isalnum() or char in {"-", "_"} for char in session_id
-    )
 
 
 def _title_from_message(message: dict[str, Any]) -> str:

@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from lulu_agent.runtime.session.model import SessionRuntimeModel
+from lulu_agent.storage.session_record import SessionRecordType
+
 
 class TaskStatus(StrEnum):
     ACTIVE = "active"
@@ -51,8 +54,10 @@ class TaskStep:
 
 
 @dataclass(frozen=True)
-class TaskState:
+class TaskState(SessionRuntimeModel):
     """任务状态, 用于记录当前会话的任务目标, 任务状态, 步骤细节, 阻塞信息, 验证信息, 下一步行动建议等"""
+    type = SessionRecordType.TASK_STATE
+
     goal: str
     status: TaskStatus
     steps: list[TaskStep] = field(default_factory=list)

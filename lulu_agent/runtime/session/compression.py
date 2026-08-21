@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from lulu_agent.runtime.session.model import SessionRuntimeModel
+from lulu_agent.storage.session_record import SessionRecordType
+
 
 class CompressionScope(StrEnum):
     TURN_RANGE = "turn_range"
@@ -11,7 +14,9 @@ class CompressionScope(StrEnum):
 
 
 @dataclass(frozen=True)
-class Compression:
+class Compression(SessionRuntimeModel):
+    type = SessionRecordType.COMPRESSION
+
     compression_id: str
     scope: CompressionScope
     covered_turn_ids: list[str] = field(default_factory=list)

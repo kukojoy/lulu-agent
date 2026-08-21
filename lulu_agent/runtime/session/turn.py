@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
 
 from lulu_agent.runtime.errors import ERROR_USER_CANCELLED, ErrorType
+from lulu_agent.runtime.session.model import SessionRuntimeModel
+from lulu_agent.storage.session_record import SessionRecordType
 
 
 class TurnStatus(StrEnum):
@@ -30,7 +33,9 @@ class TurnExitReason(StrEnum):
 
 
 @dataclass(frozen=True)
-class Turn:
+class Turn(SessionRuntimeModel):
+    type = SessionRecordType.TURN
+
     turn_id: str
     status: TurnStatus
     exit_reason: TurnExitReason
@@ -78,7 +83,7 @@ class Turn:
 
 @dataclass
 class TurnRuntime:
-    turn_id: str
+    turn_id: str = field(default_factory=lambda: _new_turn_id())
     status: TurnStatus = TurnStatus.RUNNING
     exit_reason: TurnExitReason | None = None
     error: str | None = None
@@ -174,3 +179,7 @@ class TurnRuntime:
             model_usage=list(self.model_usage),
             final_response=final_response,
         )
+
+
+def _new_turn_id() -> str:
+    return f"turn-{uuid4().hex[:8]}"

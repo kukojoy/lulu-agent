@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from lulu_agent.runtime.compression import Compression
-from lulu_agent.runtime.message import Message
-from lulu_agent.runtime.turn import Turn
+from lulu_agent.runtime.session.compression import Compression
+from lulu_agent.runtime.session.message import Message
+from lulu_agent.runtime.session.turn import Turn
 
 
 class ContextCompressionAction(StrEnum):

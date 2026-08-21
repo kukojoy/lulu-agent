@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from lulu_agent.runtime.review import ReviewerType
-from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.session.message import Message
 from lulu_agent.llm.client import LLMClient
 
 

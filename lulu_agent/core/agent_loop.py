@@ -24,11 +24,12 @@ from lulu_agent.runtime.events import (
     EventPayloadBuilder,
     RuntimeEvent,
 )
-from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink, new_turn_id
+from lulu_agent.runtime.event_sinks import EventSink, NoopEventSink
 from lulu_agent.runtime.errors import ERROR_APPROVAL_DENIED, LuluError
-from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.session.message import Message
 from lulu_agent.runtime.review import ReviewerType, ReviewStatus
-from lulu_agent.runtime.turn import TurnExitReason, TurnRuntime, TurnStatus
+from lulu_agent.runtime.session.turn import TurnExitReason, TurnRuntime, TurnStatus
+from lulu_agent.runtime.utils import get_local_time
 
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
@@ -87,7 +88,7 @@ class AgentLoop:
 
     def run(self, user_input: str) -> str:
         self._interrupt_requested.clear()
-        self.turn_runtime = TurnRuntime(turn_id=new_turn_id())
+        self.turn_runtime = TurnRuntime()
         turn_runtime = self._active_turn()
 
         # === event emit ===
@@ -110,10 +111,11 @@ class AgentLoop:
             self._compress_context()
             for _ in range(self.max_turns):
                 self._interrupt_checkpoint()
-                request_messages = self.context_manager.prepare_messages(
+                context_messages = self.context_manager.prepare_messages(
                     self.messages,
                     context_blocks=[self._runtime_environment_context_block()],
                 )
+                request_messages = [message.for_request() for message in context_messages]
                 tool_schemas = self.tool_registry.schemas()
 
                 # === event emit and turn state update ===
@@ -226,8 +228,8 @@ class AgentLoop:
     def _runtime_environment_context_block(self) -> dict:
         turn_runtime = self._active_turn()
         
-        now = datetime.now().astimezone()
-        timezone_name = now.tzname() or str(now.tzinfo or "local")
+        now = get_local_time()
+        timezone_name = now.tzname() or "unknown"
         model_name = self.llm_client.get_model_config().to_dict().get('model')
         lines = [
             "Time:",
@@ -346,7 +348,7 @@ class AgentLoop:
         system_message = Message(role="system", content=SYSTEM_PROMPT)
         messages = [system_message]
         if self.session_store and self.session_id:
-            self.session_store.append_message(self.session_id, system_message)
+            self.session_store.append_record(system_message.to_record(self.session_id))
         return messages
     
     def _append_message(self, message: Message) -> None:
@@ -361,7 +363,7 @@ class AgentLoop:
 
         self.messages.append(message)
         if self.session_store and self.session_id:
-            self.session_store.append_message(self.session_id, message)
+            self.session_store.append_record(message.to_record(self.session_id))
 
     # === 用户消息处理 ===
     def _append_user_message(self, content: str) -> None:
@@ -462,7 +464,7 @@ class AgentLoop:
         turn_runtime = self._active_turn()
         turn = turn_runtime.to_turn(final_response)
         if self.session_store and self.session_id:
-            self.session_store.append_turn(self.session_id, turn)
+            self.session_store.append_record(turn.to_record(self.session_id))
         self._review_knowledge(turn)
         self._emit(
             EVENT_TURN_END,

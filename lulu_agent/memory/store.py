@@ -16,7 +16,7 @@ from pathlib import Path
 
 from lulu_agent.memory.utils import truncate_memory_text
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
-from lulu_agent.runtime.file_lock import exclusive_file_lock
+from lulu_agent.runtime.utils import exclusive_file_lock, get_local_time
 
 
 DEFAULT_GLOBAL_MEMORY_PATH = Path.home() / ".lulu" / "memory" / "MEMORY.md"
@@ -157,7 +157,7 @@ class MemoryStore:
                 id=self._next_id(entries),
                 kind=kind,
                 content=content,
-                updated_at=self._today(),
+                updated_at=get_local_time().isoformat(),
             )
             entries.append(entry)
             self._write_entries(entries)
@@ -180,7 +180,7 @@ class MemoryStore:
                 id=entry_id,
                 kind=kind,
                 content=content,
-                updated_at=self._today(),
+                updated_at=get_local_time().isoformat(),
             )
             entries[index] = entry
             self._write_entries(entries)
@@ -243,7 +243,7 @@ class MemoryStore:
         lines = ["Global memory:"]
         for entry in entries:
             lines.append(
-                f"- [#{entry.id} {entry.kind} updated {entry.updated_at}] {entry.content}"
+                f"- [#{entry.id} {entry.kind} updated {self._parse_date(entry.updated_at)}] {entry.content}"
             )
         return "\n".join(lines)
     
@@ -291,7 +291,7 @@ class MemoryStore:
         kind = metadata.get("kind")
         self._validate_kind(kind)
 
-        updated_at = self._parse_date(metadata.get("updated_at")) or self._today()
+        updated_at = metadata.get("updated_at") or get_local_time().isoformat()
 
         return MemoryEntry(
             id=entry_id,
@@ -313,11 +313,11 @@ class MemoryStore:
         return metadata if isinstance(metadata, dict) else None
 
     def _parse_date(self, date: str) -> str | None:
-        """解析日期字符串"""
+        """解析日期字符串, 将 isoformat 转换为 YYYY-MM-DD 格式"""
         if not isinstance(date, str):
             return None
         try:
-            return datetime.strptime(date, "%Y-%m-%d").date().isoformat()
+            return datetime.fromisoformat(date).date().isoformat()
         except ValueError:
             return None
 
@@ -346,9 +346,6 @@ class MemoryStore:
 
     def _next_id(self, entries: list[MemoryEntry]) -> int:
         return max((entry.id for entry in entries), default=0) + 1
-
-    def _today(self) -> str:
-        return datetime.now().astimezone().date().isoformat()
 
     def _result(self, message: str, **kwargs) -> MemoryResult:
         """返回记忆操作状态

@@ -6,8 +6,8 @@ from uuid import uuid4
 from lulu_agent.context.budget import ContextCompressionAction, ContextPlan, group_messages_by_turn
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.llm.response import ModelRequest
-from lulu_agent.runtime.message import Message
-from lulu_agent.runtime.compression import Compression, CompressionScope
+from lulu_agent.runtime.session.message import Message
+from lulu_agent.runtime.session.compression import Compression, CompressionScope
 from lulu_agent.storage.session_store import SessionStore
 
 TURN_LEVEL_COMPRESSION_SYSTEM_PROMPT = """You compress old agent conversation turns for future context reconstruction.
@@ -112,7 +112,7 @@ def _compress_old_turns(
         model=getattr(llm_client, "model", ""),
         reason=plan.reason,
     )
-    session_store.append_compression(session_id, compression)
+    session_store.append_record(compression.to_record(session_id))
     return compression
 
 
@@ -157,7 +157,7 @@ def _compress_full_history(
         model=getattr(llm_client, "model", ""),
         reason=plan.reason,
     )
-    session_store.append_compression(session_id, compression)
+    session_store.append_record(compression.to_record(session_id))
     return compression
 
 

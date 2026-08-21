@@ -4,11 +4,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from lulu_agent.runtime.compression import Compression
-from lulu_agent.runtime.message import Message
-from lulu_agent.runtime.task_state import TaskState
-from lulu_agent.runtime.turn import Turn
-
 
 class SessionRecordType(StrEnum):
     MESSAGE = "message"
@@ -25,68 +20,29 @@ class SessionRecord:
     data: dict[str, Any]
 
     @classmethod
-    def from_message(
-        cls,
-        session_id: str,
-        created_at: str,
-        message: Message,
-    ) -> "SessionRecord":
+    def from_dict(cls, raw_record: dict[str, Any]) -> "SessionRecord":
+        record_type = raw_record.get("type")
+        session_id = raw_record.get("session_id")
+        created_at = raw_record.get("created_at")
+        data = raw_record.get("data")
+
+        if not isinstance(record_type, str) or not record_type:
+            raise ValueError("session record type must be a non-empty string.")
+        try:
+            parsed_type = SessionRecordType(record_type)
+        except ValueError:
+            raise ValueError("session record type is invalid.")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session record session_id must be a non-empty string.")
+        if not isinstance(created_at, str) or not created_at:
+            raise ValueError("session record created_at must be a non-empty string.")
+        if not isinstance(data, dict):
+            raise ValueError(f"{parsed_type.value} must be an object.")
         return cls(
-            type=SessionRecordType.MESSAGE,
+            type=parsed_type,
             session_id=session_id,
             created_at=created_at,
-            data=message.to_dict(),
-        )
-
-    @classmethod
-    def from_turn(
-        cls,
-        session_id: str,
-        created_at: str,
-        turn: Turn,
-    ) -> "SessionRecord":
-        return cls(
-            type=SessionRecordType.TURN,
-            session_id=session_id,
-            created_at=created_at,
-            data=turn.to_dict(),
-        )
-
-    @classmethod
-    def from_compression(
-        cls,
-        session_id: str,
-        created_at: str,
-        compression: Compression,
-    ) -> "SessionRecord":
-        return cls(
-            type=SessionRecordType.COMPRESSION,
-            session_id=session_id,
-            created_at=created_at,
-            data=compression.to_dict(),
-        )
-
-    @classmethod
-    def from_task_state(
-        cls,
-        session_id: str,
-        created_at: str,
-        task_state: TaskState,
-    ) -> "SessionRecord":
-        return cls(
-            type=SessionRecordType.TASK_STATE,
-            session_id=session_id,
-            created_at=created_at,
-            data=task_state.to_dict(),
-        )
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SessionRecord":
-        return cls(
-            type=SessionRecordType(data["type"]),
-            session_id=data["session_id"],
-            created_at=data["created_at"],
-            data=data["data"],
+            data=data,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -96,23 +52,3 @@ class SessionRecord:
             "created_at": self.created_at,
             "data": dict(self.data),
         }
-
-    def to_message(self) -> Message:
-        self._ensure_type(SessionRecordType.MESSAGE)
-        return Message.from_dict(self.data)
-
-    def to_turn(self) -> Turn:
-        self._ensure_type(SessionRecordType.TURN)
-        return Turn.from_dict(self.data)
-
-    def to_compression(self) -> Compression:
-        self._ensure_type(SessionRecordType.COMPRESSION)
-        return Compression.from_dict(self.data)
-
-    def to_task_state(self) -> TaskState:
-        self._ensure_type(SessionRecordType.TASK_STATE)
-        return TaskState.from_dict(self.data)
-
-    def _ensure_type(self, expected: SessionRecordType) -> None:
-        if self.type != expected:
-            raise ValueError(f"SessionRecord type must be {expected.value}, got {self.type.value}.")

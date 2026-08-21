@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS, ERROR_NOT_FOUND, ErrorType, LuluError
-from lulu_agent.runtime.file_lock import exclusive_file_lock
+from lulu_agent.runtime.utils import exclusive_file_lock
 
 
 DEFAULT_SKILLS_ROOT = Path.home() / ".lulu" / "skills"

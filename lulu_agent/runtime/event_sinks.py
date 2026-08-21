@@ -9,7 +9,6 @@ from lulu_agent.runtime.events import (
     EVENT_ASSISTANT_MESSAGE,
     EVENT_TURN_END,
 )
-from uuid import uuid4
 
 
 class EventSink:
@@ -131,7 +130,3 @@ class CliEventSink(EventSink):
         if self._is_streaming:
             print()
             self._is_streaming = False
-
-
-def new_turn_id() -> str:
-    return f"turn-{uuid4().hex[:8]}"

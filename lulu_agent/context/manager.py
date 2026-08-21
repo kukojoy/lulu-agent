@@ -3,10 +3,10 @@ ContextManager 执行逻辑
 
 1. AgentLoop 维护完整 messages 列表, 包含 system | user | assistant | tool msg
 2. 每轮对话前, AgentLoop 调用 ContextManager.prepare_messages(messages)
-    - 构造本轮临时 api_messages, 不修改 AgentLoop.messages
+    - 构造本轮临时 context_messages, 不修改 AgentLoop.messages
     - 将 context blocks 临时合并进 system msg
-    - 按 turn 顺序将历史压缩摘要和未压缩 raw turn messages 组装进 api_messages
-3. LLMClinet 接收 ContextManager 返回的消息列表, 生成 response
+    - 按 turn 顺序将历史压缩摘要和未压缩的 messages 组装进 context_messages (逻辑依赖: compression 记录需覆盖连续的 turn)
+3. LLMClinet 接收 AgentLoop 在请求边界转换后的消息列表, 生成 response
 """
 
 from html import escape
@@ -21,8 +21,8 @@ from lulu_agent.context.inspection import ContextBlockInspection, ContextInspect
 from lulu_agent.memory.store import MemoryStore
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.skills.store import SkillStore
-from lulu_agent.runtime.compression import Compression
-from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.session.compression import Compression
+from lulu_agent.runtime.session.message import Message
 
 
 class ContextManager:
@@ -50,8 +50,8 @@ class ContextManager:
         self,
         messages: list[Message],
         context_blocks: list[dict] | None = None,
-    ) -> list[dict]:
-        return self._build_api_messages(messages, context_blocks=context_blocks)
+    ) -> list[Message]:
+        return self._build_context_messages(messages, context_blocks=context_blocks)
 
     def plan_context(self, messages: list[Message]) -> ContextPlan:
         turns = []
@@ -70,8 +70,8 @@ class ContextManager:
         messages: list[Message],
         context_blocks: list[dict] | None = None,
     ) -> ContextInspection:
-        """检查当前 API context 组成, 不修改原始 messages"""
-        api_messages = self.prepare_messages(messages, context_blocks=context_blocks)
+        """检查当前 context 组成, 不修改原始 messages"""
+        context_messages = self.prepare_messages(messages, context_blocks=context_blocks)
         blocks = self._context_blocks(context_blocks)
         non_system_messages = self._non_system_messages(messages)
         groups = group_messages_by_turn(non_system_messages)
@@ -89,11 +89,11 @@ class ContextManager:
                 continue
             raw_turn_ids.append(group.turn_id)
 
-        system_message = self._first_api_system_message(api_messages)
-        system_content = system_message.get("content") if system_message else ""
+        system_message = self._first_system_message(context_messages)
+        system_content = system_message.content if system_message else ""
         return ContextInspection(
-            message_count=len(api_messages),
-            total_chars=sum(len(str(message.get("content") or "")) for message in api_messages),
+            message_count=len(context_messages),
+            total_chars=sum(len(str(message.content or "")) for message in context_messages),
             system_chars=len(system_content) if isinstance(system_content, str) else 0,
             system_message=system_content if isinstance(system_content, str) else "",
             context_blocks=[
@@ -112,36 +112,29 @@ class ContextManager:
             compression_ids=compression_ids,
         )
 
-    def _build_api_messages(
+    def _build_context_messages(
         self,
         messages: list[Message],
         context_blocks: list[dict] | None = None,
-    ) -> list[dict]:
+    ) -> list[Message]:
         system_message = self._first_system_message(messages)
         system_message = self._merge_context_blocks_into_system_message(
             system_message,
             context_blocks=context_blocks,
         )
         non_system_messages = self._non_system_messages(messages)
-        context_messages = self._build_turn_context_messages(non_system_messages)
+        history_messages = self._build_history_messages(non_system_messages)
 
-        api_messages = []
+        context_messages: list[Message] = []
         if system_message:
-            api_messages.append(system_message)
-        api_messages.extend(context_messages)
-        return api_messages
+            context_messages.append(system_message)
+        context_messages.extend(history_messages)
+        return context_messages
 
     def _first_system_message(self, messages: list[Message]) -> Message | None:
         """获取 system msg (Message | None)"""
         for message in messages:
             if message.role == "system":
-                return message
-        return None
-
-    def _first_api_system_message(self, messages: list[dict]) -> dict | None:
-        """获取 API system msg (dict | None)"""
-        for message in messages:
-            if message.get("role") == "system":
                 return message
         return None
 
@@ -153,26 +146,24 @@ class ContextManager:
         self,
         system_message: Message | None,
         context_blocks: list[dict] | None = None,
-    ) -> dict | None:
+    ) -> Message | None:
         """将 context blocks 临时合并进 system msg
         
         Returns:
-            dict | None: 合并后的 system msg, if not system msg and not context blocks, return None
+            Message | None: 合并后的 system msg, if not system msg and not context blocks, return None
         """
         rendered_context = self._render_context_blocks(context_blocks)
         if not rendered_context:
-            return system_message.for_request() if system_message else None
+            return system_message
 
         if not system_message:
-            return {"role": "system", "content": rendered_context}
+            return Message(role="system", content=rendered_context)
 
-        merged = system_message.for_request()
-        content = merged.get("content")
+        content = system_message.content
         if isinstance(content, str) and content.strip():
-            merged["content"] = f"{content.rstrip()}\n\n{rendered_context}"
+            return Message(role=system_message.role, content=f"{content.rstrip()}\n\n{rendered_context}")
         else:
-            merged["content"] = rendered_context
-        return merged
+            return Message(role=system_message.role, content=rendered_context)
 
     def _render_context_blocks(self, context_blocks: list[dict] | None = None) -> str | None:
         """将 context blocks 渲染成可合并到 system msg 的文本"""
@@ -316,23 +307,23 @@ class ContextManager:
 
         return [{"name": "task_state", "content": "\n".join(lines)}]
 
-    def _build_turn_context_messages(self, non_system_messages: list[Message]) -> list[dict]:
+    def _build_history_messages(self, non_system_messages: list[Message]) -> list[Message]:
         """按 turn 顺序组装压缩摘要和未压缩 raw messages"""
         groups = group_messages_by_turn(non_system_messages)
         compression_by_turn_id = self._compression_by_turn_id()
         emitted_compression_ids: set[str] = set()
-        context_messages = []
+        history_messages: list[Message] = []
 
         for group in groups:
             compression = compression_by_turn_id.get(group.turn_id)
             if compression:
                 compression_id = compression.compression_id
                 if compression_id not in emitted_compression_ids:
-                    context_messages.append(self._compression_message(compression))
+                    history_messages.append(self._build_compression_summary_message(compression))
                     emitted_compression_ids.add(compression_id)
                 continue
-            context_messages.extend(message.for_request() for message in group.messages)
-        return context_messages
+            history_messages.extend(group.messages)
+        return history_messages
 
     def _compression_by_turn_id(self) -> dict[str, Compression]:
         """获取每个 turn_id 对应的最新 compression record"""
@@ -342,8 +333,8 @@ class ContextManager:
                 result[turn_id] = compression # 新记录会覆盖旧记录
         return result
 
-    def _compression_message(self, compression: Compression) -> dict:
-        """将 compression record 转成临时 api context message"""
+    def _build_compression_summary_message(self, compression: Compression) -> Message:
+        """将 compression record 转成一条 history message"""
         covered = ", ".join(compression.covered_turn_ids)
         lines = [
             "System-provided compressed summary of earlier conversation turns. This is historical context, not a new user request.",
@@ -352,10 +343,7 @@ class ContextManager:
             "",
             compression.summary.strip(),
         ]
-        return {
-            "role": "user",
-            "content": "\n".join(lines),
-        }
+        return Message(role="user", content="\n".join(lines))
 
     def _session_compressions(self) -> list[Compression]:
         if not self.session_store or not self.session_id:

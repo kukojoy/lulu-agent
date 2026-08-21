@@ -7,7 +7,7 @@ Actions:
     - update: 更新当前任务状态, overwrite 选择覆盖完整状态/增量更新状态
 """
 
-from lulu_agent.runtime.task_state import TaskState, TaskStatus, TaskStepStatus
+from lulu_agent.runtime.session.task_state import TaskState, TaskStatus, TaskStepStatus
 from lulu_agent.storage.session_store import SessionStore
 from lulu_agent.tools import ToolResult, tool
 from lulu_agent.runtime.errors import ERROR_INVALID_ARGUMENTS
@@ -131,7 +131,7 @@ def task_state(args):
                 current = _merge_task_state(session_store.load_latest_task_state(session_id), state)
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc), error_type=ERROR_INVALID_ARGUMENTS)
-        session_store.append_task_state(session_id, current)
+        session_store.append_record(current.to_record(session_id))
         return ToolResult(ok=True, output={"task_state": current.to_dict()})
 
     return ToolResult(

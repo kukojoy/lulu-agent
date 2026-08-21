@@ -1,10 +1,16 @@
-"""Cross-platform advisory file locks."""
+"""Runtime-level helpers that are shared by runtime models and sinks."""
 
 from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from datetime import datetime
 from typing import IO, Iterator
+
+
+def get_local_time() -> datetime:
+    return datetime.now().astimezone()
+
 
 if os.name == "nt":
     import msvcrt

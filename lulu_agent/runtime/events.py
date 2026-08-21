@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from lulu_agent.runtime.review import ReviewerType, ReviewStatus
 from lulu_agent.runtime.errors import ErrorType
+from lulu_agent.runtime.utils import get_local_time
 
 
 class RuntimeEventType(StrEnum):
@@ -43,14 +43,14 @@ class RuntimeEvent:
     Attributes:
         type: 事件类型
         turn_id: 对话轮次 ID, agent loop 每次 run 都会生成一个新的 turn_id
-        payload: 事件载荷 (主体数据)
         timestamp: 事件发生时间戳 (本地时区)
+        payload: 事件载荷 (主体数据)
     """
     type: RuntimeEventType
     turn_id: str
+    timestamp: str = field(default_factory=lambda: get_local_time().isoformat())
     payload: dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now().astimezone().isoformat())
-
+    
     def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,

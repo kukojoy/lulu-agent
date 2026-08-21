@@ -3,9 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from lulu_agent.runtime.session.model import SessionRuntimeModel
+from lulu_agent.storage.session_record import SessionRecordType
+
 
 @dataclass(frozen=True)
-class Message:
+class Message(SessionRuntimeModel):
+    type = SessionRecordType.MESSAGE
+
     role: str
     content: Any = None
     tool_call_id: str | None = None

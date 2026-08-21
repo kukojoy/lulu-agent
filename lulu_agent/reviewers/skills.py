@@ -5,7 +5,7 @@ import json
 from lulu_agent.context.manager import ContextManager
 from lulu_agent.core.agent_loop import AgentLoop
 from lulu_agent.llm.client import LLMClient
-from lulu_agent.runtime.message import Message
+from lulu_agent.runtime.session.message import Message
 from lulu_agent.reviewers.base import BaseReviewer, BaseReviewResult, ReviewerType
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.memory.store import MemoryStore
