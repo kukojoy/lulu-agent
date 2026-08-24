@@ -2,7 +2,7 @@
 
 `lulu-agent` 是一个本地运行的通用 agent。它提供 Web GUI (推荐) 和 CLI 两种入口，可以在本机进行日常对话、读写文件、执行命令、维护长期记忆和复用技能等。
 
-当前状态：`v4.0 in progress`。
+当前版本：`v4.0`。
 
 ## 主要能力
 
@@ -10,7 +10,7 @@
 - CLI 入口，支持会话恢复、会话查看和 context inspect。
 - OpenAI-compatible 模型服务，支持 streaming 和 tool calling。
 - 全局 session / trace 持久化，可以跨 workspace 恢复历史会话并查看运行诊断；workspace 失效时会锁定 session，保留数据等待原路径恢复或用户显式删除。
-- 规范化 session transcript：内部使用 `Message` / `Turn` / `Compression` / `TaskState` 运行态模型，落盘统一使用 session record JSONL。
+- 持久化会话历史和任务状态，关闭后可以继续恢复和查看。
 - 本地文件工具：列文件、读文件、写文件、替换文件、全文搜索。
 - Shell 工具：执行本地命令，并对高风险命令做安全拦截或确认。
 - Web 工具：通过 Tavily 进行搜索和网页内容提取。
@@ -166,23 +166,11 @@ python -m cli.main --inspect-context <session_id>
   mcp.json
 ```
 
-`sessions/` 保存 transcript、turn、compression 和 task state；`traces/` 保存 runtime events。两者都以 `session_id` 对齐，删除 session 时会同步删除对应 trace。每个 session metadata 固定记录创建时选择的 workspace，恢复会话后文件工具、文本搜索、shell cwd、路径 safety 和项目 `AGENTS.md` 都以该 workspace 为准。
+`sessions/` 保存会话历史和任务状态，`traces/` 保存运行过程。删除 session 时，对应的 trace 也会一起删除。每个 session 都会记住创建时选择的 workspace；恢复会话后，文件读写、文本搜索、Shell 命令和项目指导文件都会继续以该目录为准。
 
-如果绑定的 workspace 被移动、删除、替换为文件或当前不可访问，session 会动态进入锁定状态。锁定期间只能在列表中查看状态、重新检查 workspace 或显式删除 session；继续会话以及 transcript、context、task、trace、model 和 MCP 等 session 操作都会被拒绝。session 和 trace 文件不会因为 workspace 失效而自动删除或迁移；原路径恢复为可访问目录后，重新检查即可自动解锁。
+如果绑定的 workspace 被移动、删除或当前不可访问，session 会进入锁定状态，避免后续操作意外落到其他目录。此时可以检查文件系统后点击 `Recheck`，也可以显式删除 session。恢复原路径后重新检查即可解锁；workspace 失效不会自动删除会话和 trace 数据。
 
-session 锁定和存储失败通过统一的结构化错误契约返回；HTTP/WebSocket 会保留 `session_workspace_unavailable`、`session_not_found`、`storage_error` 等稳定错误码。GUI 的锁定状态只使用 `locked/lock_message`，不会把动态状态写回 session index。
-
-session JSONL 每行使用统一 record envelope：
-
-```json
-{"type":"message","session_id":"session-...","created_at":"...","data":{}}
-```
-
-其中 `data` 是对应运行态模型的字典形式。发送给模型的请求上下文由 `ContextManager` 临时构造为 `Message` 列表，并在 `AgentLoop` 请求边界通过 `Message.for_request()` 过滤 `turn_id` 等 session-only 字段；原始 session transcript 不会因为上下文压缩而被覆盖。
-
-后端结构上，`server/` 只负责本地 Web GUI 的 HTTP/WebSocket 接入和运行态编排；session、task、trace、memory、skills、model provider 等可复用查询视图由 `interaction/` service 整理。
-
-旧版本保存在项目目录 `.lulu/sessions` / `.lulu/traces` 的数据不会自动迁移。需要保留旧数据时，应在后续使用单独的一次性迁移流程，不要直接混合两套 index 或 JSONL。
+旧版本保存在项目目录 `.lulu/sessions` / `.lulu/traces` 的数据不会自动迁移到 `~/.lulu/`。升级前如需保留这些数据，请先备份原目录。
 
 ## Memory
 
@@ -228,7 +216,7 @@ MCP 用来接入外部工具。当前支持 stdio MCP server。
 ~/.lulu/mcp.json
 ```
 
-启动时 lulu-agent 会读取该配置，发现 MCP tools，并把它们注册为可调用工具。AgentLoop/MCP 初始化按 session 隔离，单个 session 的慢连接不会持有 server 全局锁或阻塞其他 session 的运行状态查询。
+启动 session 时，lulu-agent 会连接配置中的 MCP server 并加载可用工具。可以在 GUI 的 MCP 面板查看加载结果；修改配置或连接异常时，可以针对当前 session 重新加载。
 
 ## Trace
 
@@ -240,4 +228,4 @@ GUI 的 Trace 面板按 turn 展示运行过程，包括模型请求、retry、�
 - Shell 工具会拒绝明显高风险命令，并对部分文件变更命令请求确认。
 - Web search / extract 需要 `TAVILY_API_KEY`。
 - 当前 MCP 仅支持 stdio transport。
-- lulu-agent 仍不是完整生产级平台；更强的中断恢复、工具治理、安全隔离、模型运行层和知识质量控制仍是后续方向。
+- 当前按本地单用户工具设计，不适合直接作为多用户或公网服务部署。

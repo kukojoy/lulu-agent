@@ -105,10 +105,11 @@ wait_for_url() {
 # 打开 GUI
 open_gui() {
   local url="$1"
-  if ! command -v open >/dev/null 2>&1; then
-    return
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
   fi
-  open "$url" >/dev/null 2>&1 || true
 }
 
 if ! BACKEND_PORT="$(find_available_port "$BACKEND_PORT")"; then

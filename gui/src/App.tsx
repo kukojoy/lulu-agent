@@ -676,6 +676,7 @@ export function App() {
   const [workspaceBrowserError, setWorkspaceBrowserError] = useState("");
   const [collapsedWorkspaceGroups, setCollapsedWorkspaceGroups] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
   const [error, setError] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("draft");
   const [streamingMessage, setStreamingMessage] = useState("");
@@ -693,6 +694,12 @@ export function App() {
   const pendingToolReasoningRef = useRef("");
   const lastRuntimeErrorRef = useRef<{ sessionId: string; message: string } | null>(null);
   const activeSessionIdRef = useRef("");
+  const creatingSessionRef = useRef(false);
+  const sessionSelectionGenerationRef = useRef(0);
+  const modelStateRequestRef = useRef(0);
+  const modelActionRequestRef = useRef(0);
+  const mcpActionRequestRef = useRef(0);
+  const providerModelsRequestRef = useRef(0);
   const defaultWorkspaceRef = useRef("");
   const reconnectTimerRef = useRef<number | null>(null);
   const inspectorResizeRef = useRef({ startX: 0, startWidth: 0 });
@@ -700,16 +707,40 @@ export function App() {
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeSessionLocked = Boolean(activeSession?.locked);
 
-  const setSessionError = useCallback((sessionId: string, message: string) => {
-    if (activeSessionIdRef.current === sessionId) {
+  const setSessionError = useCallback((
+    sessionId: string,
+    message: string,
+    generation?: number,
+  ) => {
+    if (
+      activeSessionIdRef.current === sessionId &&
+      (generation === undefined || sessionSelectionGenerationRef.current === generation)
+    ) {
       setError(message);
     }
   }, []);
 
   const selectSession = useCallback((sessionId: string) => {
+    if (activeSessionIdRef.current === sessionId) {
+      setError("");
+      return;
+    }
+    sessionSelectionGenerationRef.current += 1;
     activeSessionIdRef.current = sessionId;
     setError("");
     setActiveSessionId(sessionId);
+  }, []);
+
+  const isCurrentSessionSelection = useCallback(
+    (sessionId: string, generation: number) =>
+      activeSessionIdRef.current === sessionId &&
+      sessionSelectionGenerationRef.current === generation,
+    [],
+  );
+
+  const finishCreatingSession = useCallback(() => {
+    creatingSessionRef.current = false;
+    setCreatingSession(false);
   }, []);
 
   const markSessionLocked = useCallback((sessionId: string, message: string) => {
@@ -782,25 +813,36 @@ export function App() {
   }, []);
 
   const handleSessionRequestError = useCallback(
-    (sessionId: string, nextError: unknown) => {
+    (sessionId: string, nextError: unknown, generation?: number) => {
+      if (
+        generation !== undefined &&
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
       if (nextError instanceof ApiError && nextError.code === "session_workspace_unavailable") {
-        setSessionError(sessionId, "");
+        setSessionError(sessionId, "", generation);
         markSessionLocked(sessionId, nextError.message);
         void refreshSessions().catch((refreshError) =>
-          setSessionError(sessionId, String(refreshError)),
+          setSessionError(sessionId, String(refreshError), generation),
         );
         return;
       }
-      setSessionError(sessionId, String(nextError));
+      setSessionError(sessionId, String(nextError), generation);
     },
-    [markSessionLocked, refreshSessions, setSessionError],
+    [isCurrentSessionSelection, markSessionLocked, refreshSessions, setSessionError],
   );
 
-  const refreshModelRuntime = useCallback(async () => {
+  const refreshModelRuntime = useCallback(async (isCurrent: () => boolean = () => true) => {
+    const requestId = ++modelStateRequestRef.current;
+    const canApply = () => modelStateRequestRef.current === requestId && isCurrent();
     const [configResult, providersResult] = await Promise.allSettled([
       getModelConfig(),
       listModelProviders(),
     ]);
+    if (!canApply()) {
+      return;
+    }
     const nextProviders =
       providersResult.status === "fulfilled" ? providersResult.value : [];
     const nextConfig =
@@ -823,6 +865,9 @@ export function App() {
       if (!fallbackModel && modelProviderReady(fallbackProvider)) {
         try {
           const discovered = await listProviderModels(fallbackProvider.name);
+          if (!canApply()) {
+            return;
+          }
           fallbackModel = discovered.models[0] || "";
           setProviderModels(discovered);
         } catch {
@@ -851,11 +896,18 @@ export function App() {
   }, []);
 
   const restoreStreamingMessageFromTrace = useCallback(
-    async (sessionId: string, turnId: string | null | undefined) => {
+    async (
+      sessionId: string,
+      turnId: string | null | undefined,
+      generation = sessionSelectionGenerationRef.current,
+    ) => {
       if (!turnId) {
         return;
       }
       const timeline = await getTraceTimeline(sessionId, turnId);
+      if (!isCurrentSessionSelection(sessionId, generation)) {
+        return;
+      }
       const restored = timeline
         .filter((item) => item.event_type === "assistant_delta")
         .map((item) => {
@@ -879,7 +931,7 @@ export function App() {
         return `${restored}${current}`;
       });
     },
-    [],
+    [isCurrentSessionSelection],
   );
 
   const refreshTraceTurns = useCallback(async () => {
@@ -887,11 +939,18 @@ export function App() {
       setTraceTurns([]);
       return;
     }
-    setTraceTurns(await getTraceTurns(activeSessionId));
-  }, [activeSessionId, activeSessionLocked]);
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const nextTraceTurns = await getTraceTurns(sessionId);
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setTraceTurns(nextTraceTurns);
+    }
+  }, [activeSessionId, activeSessionLocked, isCurrentSessionSelection]);
 
   const refreshSession = useCallback(
     async (sessionId: string) => {
+      const generation = sessionSelectionGenerationRef.current;
+      const modelRequestId = ++modelStateRequestRef.current;
       const [
         nextInspection,
         nextMessages,
@@ -903,17 +962,31 @@ export function App() {
         getTaskState(sessionId),
         getRuntimeState(sessionId),
       ]);
+      if (!isCurrentSessionSelection(sessionId, generation)) {
+        return;
+      }
       const nextModelConfig = await getSessionModelConfig(sessionId).catch(() => null);
+      if (!isCurrentSessionSelection(sessionId, generation)) {
+        return;
+      }
       const nextTraceTurns = await getTraceTurns(sessionId).catch(() => []);
+      if (!isCurrentSessionSelection(sessionId, generation)) {
+        return;
+      }
       setInspection(nextInspection);
       setMessages(nextMessages);
       setTaskState(nextTaskState);
       setTraceTurns(nextTraceTurns);
       applyRuntimeState(nextRuntimeState);
       if (nextModelConfig) {
-        setModelConfig(nextModelConfig);
+        if (modelStateRequestRef.current === modelRequestId) {
+          setModelConfig(nextModelConfig);
+        }
       } else {
-        await refreshModelRuntime();
+        await refreshModelRuntime(() => isCurrentSessionSelection(sessionId, generation));
+      }
+      if (!isCurrentSessionSelection(sessionId, generation)) {
+        return;
       }
       if (!nextRuntimeState.active) {
         setMemoryView(null);
@@ -922,10 +995,19 @@ export function App() {
         setMcpTools(null);
       }
       if (nextRuntimeState.running && nextRuntimeState.status === "streaming_assistant") {
-        await restoreStreamingMessageFromTrace(sessionId, nextRuntimeState.active_turn_id);
+        await restoreStreamingMessageFromTrace(
+          sessionId,
+          nextRuntimeState.active_turn_id,
+          generation,
+        );
       }
     },
-    [applyRuntimeState, refreshModelRuntime, restoreStreamingMessageFromTrace],
+    [
+      applyRuntimeState,
+      isCurrentSessionSelection,
+      refreshModelRuntime,
+      restoreStreamingMessageFromTrace,
+    ],
   );
 
   const refreshActiveSession = useCallback(async () => {
@@ -966,16 +1048,26 @@ export function App() {
       setMemoryView(null);
       return;
     }
-    setMemoryView(await getMemory());
-  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const nextMemoryView = await getMemory();
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setMemoryView(nextMemoryView);
+    }
+  }, [activeSessionId, isCurrentSessionSelection, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshTask = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       setTaskState(null);
       return;
     }
-    setTaskState(await getTaskState(activeSessionId));
-  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const nextTaskState = await getTaskState(sessionId);
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setTaskState(nextTaskState);
+    }
+  }, [activeSessionId, isCurrentSessionSelection, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshSkills = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
@@ -983,26 +1075,40 @@ export function App() {
       setSelectedSkill(null);
       return;
     }
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
     const nextSkillList = await listSkills();
-    setSkillList(nextSkillList);
-  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setSkillList(nextSkillList);
+    }
+  }, [activeSessionId, isCurrentSessionSelection, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshMcpTools = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       setMcpTools(null);
       return;
     }
-    setMcpTools(await listMcpTools(activeSessionId));
-  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const nextMcpTools = await listMcpTools(sessionId);
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setMcpTools(nextMcpTools);
+    }
+  }, [activeSessionId, isCurrentSessionSelection, runtimeState?.active, runtimeState?.session_id]);
 
   const refreshProviderModels = useCallback(async (provider: string, fallbackModel = "") => {
+    const requestId = ++providerModelsRequestRef.current;
     if (!provider) {
       setProviderModels(null);
+      setModelListLoading(false);
       return;
     }
     setModelListLoading(true);
     try {
       const latestProviders = await listModelProviders();
+      if (providerModelsRequestRef.current !== requestId) {
+        return;
+      }
       setModelProviders(latestProviders);
       const latestProvider = latestProviders.find((item) => item.name === provider);
       const nextFallbackModel = latestProvider?.default_model || fallbackModel;
@@ -1016,13 +1122,22 @@ export function App() {
         return;
       }
       const result = await listProviderModels(provider);
+      if (providerModelsRequestRef.current !== requestId) {
+        return;
+      }
       setProviderModels(result);
       const nextModel = result.models[0] || nextFallbackModel;
       if (nextModel) {
         setModelDraft((current) => (current.trim() ? current : nextModel));
       }
+    } catch (nextError) {
+      if (providerModelsRequestRef.current === requestId) {
+        throw nextError;
+      }
     } finally {
-      setModelListLoading(false);
+      if (providerModelsRequestRef.current === requestId) {
+        setModelListLoading(false);
+      }
     }
   }, []);
 
@@ -1050,7 +1165,18 @@ export function App() {
     if (!selectedModelProvider || !modelDraft.trim()) {
       return;
     }
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const actionRequestId = ++modelActionRequestRef.current;
+    const modelRequestId = ++modelStateRequestRef.current;
     const latestProviders = await listModelProviders();
+    if (
+      modelStateRequestRef.current !== modelRequestId ||
+      modelActionRequestRef.current !== actionRequestId ||
+      !isCurrentSessionSelection(sessionId, generation)
+    ) {
+      return;
+    }
     setModelProviders(latestProviders);
     const provider = latestProviders.find((item) => item.name === selectedModelProvider);
     if (!modelProviderReady(provider)) {
@@ -1063,7 +1189,7 @@ export function App() {
       });
       return;
     }
-    if (!activeSessionId) {
+    if (!sessionId) {
       setModelConfig({
         provider: selectedModelProvider,
         model: modelDraft.trim(),
@@ -1074,22 +1200,64 @@ export function App() {
       setModelPanelOpen(false);
       return;
     }
-    const sessionId = activeSessionId;
     setModelSwitchingSessionId(sessionId);
     try {
-      setModelConfig(await updateSessionModel(sessionId, selectedModelProvider, modelDraft.trim()));
-      applyRuntimeState(await getRuntimeState(sessionId));
+      const nextModelConfig = await updateSessionModel(
+        sessionId,
+        selectedModelProvider,
+        modelDraft.trim(),
+      );
+      if (
+        modelStateRequestRef.current !== modelRequestId ||
+        modelActionRequestRef.current !== actionRequestId ||
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
+      setModelConfig(nextModelConfig);
+      const nextRuntimeState = await getRuntimeState(sessionId);
+      if (
+        modelStateRequestRef.current !== modelRequestId ||
+        modelActionRequestRef.current !== actionRequestId ||
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
+      applyRuntimeState(nextRuntimeState);
       setModelPanelOpen(false);
     } catch (nextError) {
+      if (
+        modelActionRequestRef.current !== actionRequestId ||
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
       const latestProviders = await listModelProviders().catch(() => null);
-      if (latestProviders) {
+      if (
+        latestProviders &&
+        modelActionRequestRef.current === actionRequestId &&
+        isCurrentSessionSelection(sessionId, generation)
+      ) {
         setModelProviders(latestProviders);
       }
-      handleSessionRequestError(sessionId, nextError);
+      if (modelActionRequestRef.current === actionRequestId) {
+        handleSessionRequestError(sessionId, nextError, generation);
+      }
     } finally {
-      setModelSwitchingSessionId((current) => (current === sessionId ? "" : current));
+      if (modelActionRequestRef.current === actionRequestId) {
+        setModelSwitchingSessionId((current) => (current === sessionId ? "" : current));
+      }
     }
-  }, [activeSessionId, applyRuntimeState, handleSessionRequestError, modelConfig?.max_retries, modelConfig?.timeout_seconds, modelDraft, selectedModelProvider]);
+  }, [
+    activeSessionId,
+    applyRuntimeState,
+    handleSessionRequestError,
+    isCurrentSessionSelection,
+    modelConfig?.max_retries,
+    modelConfig?.timeout_seconds,
+    modelDraft,
+    selectedModelProvider,
+  ]);
 
   const reloadMcpToolsForActiveSession = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
@@ -1097,22 +1265,44 @@ export function App() {
       return;
     }
     const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const actionRequestId = ++mcpActionRequestRef.current;
     setMcpReloadingSessionId(sessionId);
     setMcpTools(null);
     try {
       const result = await reloadMcpTools(sessionId);
+      if (
+        mcpActionRequestRef.current !== actionRequestId ||
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
       setMcpTools(result.tools);
-      applyRuntimeState(await getRuntimeState(sessionId));
-      refreshSessions().catch((nextError) => setSessionError(sessionId, String(nextError)));
+      const nextRuntimeState = await getRuntimeState(sessionId);
+      if (
+        mcpActionRequestRef.current !== actionRequestId ||
+        !isCurrentSessionSelection(sessionId, generation)
+      ) {
+        return;
+      }
+      applyRuntimeState(nextRuntimeState);
+      refreshSessions().catch((nextError) =>
+        setSessionError(sessionId, String(nextError), generation),
+      );
     } catch (nextError) {
-      handleSessionRequestError(sessionId, nextError);
+      if (mcpActionRequestRef.current === actionRequestId) {
+        handleSessionRequestError(sessionId, nextError, generation);
+      }
     } finally {
-      setMcpReloadingSessionId((current) => (current === sessionId ? "" : current));
+      if (mcpActionRequestRef.current === actionRequestId) {
+        setMcpReloadingSessionId((current) => (current === sessionId ? "" : current));
+      }
     }
   }, [
     activeSessionId,
     applyRuntimeState,
     handleSessionRequestError,
+    isCurrentSessionSelection,
     refreshSessions,
     runtimeState?.active,
     runtimeState?.session_id,
@@ -1122,8 +1312,13 @@ export function App() {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       return;
     }
-    setSelectedSkill(await readSkill(name));
-  }, [activeSessionId, runtimeState?.active, runtimeState?.session_id]);
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
+    const nextSkill = await readSkill(name);
+    if (isCurrentSessionSelection(sessionId, generation)) {
+      setSelectedSkill(nextSkill);
+    }
+  }, [activeSessionId, isCurrentSessionSelection, runtimeState?.active, runtimeState?.session_id]);
 
   function toggleMcpServer(name: string) {
     setExpandedMcpServers((current) => {
@@ -1268,8 +1463,10 @@ export function App() {
   }, [modelConfig?.model, modelConfig?.provider, modelPanelOpen]);
 
   useEffect(() => {
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
     refreshActiveSession().catch((nextError) =>
-      handleSessionRequestError(activeSessionId, nextError),
+      handleSessionRequestError(sessionId, nextError, generation),
     );
   }, [activeSessionId, handleSessionRequestError, refreshActiveSession]);
 
@@ -1278,6 +1475,8 @@ export function App() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
     if (!activeSessionId) {
       setTraceTurns([]);
       setMemoryView(null);
@@ -1291,7 +1490,7 @@ export function App() {
     }
     if (inspectorView === "trace") {
       refreshTraceTurns().catch((nextError) =>
-        handleSessionRequestError(activeSessionId, nextError),
+        handleSessionRequestError(sessionId, nextError, generation),
       );
     }
     if (runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
@@ -1303,17 +1502,17 @@ export function App() {
     }
     if (inspectorView === "memory") {
       refreshMemory().catch((nextError) =>
-        handleSessionRequestError(activeSessionId, nextError),
+        handleSessionRequestError(sessionId, nextError, generation),
       );
     }
     if (inspectorView === "skills") {
       refreshSkills().catch((nextError) =>
-        handleSessionRequestError(activeSessionId, nextError),
+        handleSessionRequestError(sessionId, nextError, generation),
       );
     }
     if (inspectorView === "mcp") {
       refreshMcpTools().catch((nextError) =>
-        handleSessionRequestError(activeSessionId, nextError),
+        handleSessionRequestError(sessionId, nextError, generation),
       );
     }
   }, [
@@ -1333,6 +1532,8 @@ export function App() {
     let disposed = false;
     let reconnectAttempt = 0;
     let sessionUnavailable = false;
+    const sessionId = activeSessionId;
+    const generation = sessionSelectionGenerationRef.current;
 
     if (reconnectTimerRef.current !== null) {
       window.clearTimeout(reconnectTimerRef.current);
@@ -1356,7 +1557,10 @@ export function App() {
       }
       setConnectionStatus(isReconnect ? "reconnecting" : "connecting");
       const socket = openRunSocket(activeSessionId, (event) => {
-        if (socketRef.current !== socket) {
+        if (
+          socketRef.current !== socket ||
+          !isCurrentSessionSelection(sessionId, generation)
+        ) {
           return;
         }
         if (event.type === "server_ready") {
@@ -1372,20 +1576,24 @@ export function App() {
               restoreStreamingMessageFromTrace(
                 nextRuntimeState.session_id,
                 nextRuntimeState.active_turn_id,
-              ).catch((nextError) => setSessionError(activeSessionId, String(nextError)));
+                generation,
+              ).catch((nextError) =>
+                setSessionError(sessionId, String(nextError), generation),
+              );
             }
           }
           const pending = pendingFirstMessageRef.current;
           if (pending?.sessionId === activeSessionId) {
             pendingFirstMessageRef.current = null;
+            finishCreatingSession();
             void runSessionMessage(pending.sessionId, pending.content);
           }
           if (isReconnect) {
             refreshActiveSession().catch((nextError) =>
-              handleSessionRequestError(activeSessionId, nextError),
+              handleSessionRequestError(sessionId, nextError, generation),
             );
             refreshSessions().catch((nextError) =>
-              setSessionError(activeSessionId, String(nextError)),
+              setSessionError(sessionId, String(nextError), generation),
             );
           }
           return;
@@ -1398,11 +1606,11 @@ export function App() {
           const message = String(event.payload.message ?? "Event stream error");
           if (code === "session_workspace_unavailable") {
             sessionUnavailable = true;
-            setSessionError(activeSessionId, "");
-            markSessionLocked(activeSessionId, message);
+            setSessionError(sessionId, "", generation);
+            markSessionLocked(sessionId, message);
             setConnectionStatus("draft");
             void refreshSessions().catch((nextError) =>
-              setSessionError(activeSessionId, String(nextError)),
+              setSessionError(sessionId, String(nextError), generation),
             );
           }
           const duplicatesRuntimeError =
@@ -1410,9 +1618,10 @@ export function App() {
             lastRuntimeErrorRef.current?.sessionId === activeSessionId &&
             lastRuntimeErrorRef.current.message === message;
           if (code !== "session_workspace_unavailable" && !duplicatesRuntimeError) {
-            setSessionError(activeSessionId, formatServerError(event.payload));
+            setSessionError(sessionId, formatServerError(event.payload), generation);
           }
           pendingFirstMessageRef.current = null;
+          finishCreatingSession();
           runningSessionIdRef.current = "";
           pendingSentMessageRef.current = "";
           const currentRuntime = runtimeStateFromPayload(event.payload.runtime);
@@ -1460,7 +1669,7 @@ export function App() {
         if (event.type === "review_summary") {
           window.setTimeout(() => {
             refreshTraceTurns().catch((nextError) =>
-              setSessionError(activeSessionId, String(nextError)),
+              setSessionError(sessionId, String(nextError), generation),
             );
           }, 100);
           return;
@@ -1513,6 +1722,9 @@ export function App() {
           }
           refreshActiveSession()
             .then(() => {
+              if (!isCurrentSessionSelection(sessionId, generation)) {
+                return;
+              }
               clearLiveTurnState();
               runningSessionIdRef.current = "";
               pendingSentMessageRef.current = "";
@@ -1532,31 +1744,40 @@ export function App() {
               }
             })
             .catch((nextError) => {
-              setSessionError(activeSessionId, String(nextError));
-              runningSessionIdRef.current = "";
-              pendingSentMessageRef.current = "";
-              setBusy(false);
+              if (isCurrentSessionSelection(sessionId, generation)) {
+                setSessionError(sessionId, String(nextError), generation);
+                runningSessionIdRef.current = "";
+                pendingSentMessageRef.current = "";
+                setBusy(false);
+              }
             });
           refreshSessions().catch((nextError) =>
-            setSessionError(activeSessionId, String(nextError)),
+            setSessionError(sessionId, String(nextError), generation),
           );
         }
       });
       socketRef.current = socket;
       socket.onclose = () => {
-        if (socketRef.current === socket) {
+        if (
+          socketRef.current === socket &&
+          isCurrentSessionSelection(sessionId, generation)
+        ) {
           if (sessionUnavailable) {
             socketRef.current = null;
             return;
           }
-          if (activeSessionId) {
-            getRuntimeState(activeSessionId)
-              .then((nextRuntimeState) =>
-                applyRuntimeState({ ...nextRuntimeState, connected: false }),
-              )
+          if (sessionId) {
+            getRuntimeState(sessionId)
+              .then((nextRuntimeState) => {
+                if (isCurrentSessionSelection(sessionId, generation)) {
+                  applyRuntimeState({ ...nextRuntimeState, connected: false });
+                }
+              })
               .catch(() => {
                 setRuntimeState((current) =>
-                  current && current.session_id === activeSessionId
+                  isCurrentSessionSelection(sessionId, generation) &&
+                  current &&
+                  current.session_id === sessionId
                     ? { ...current, connected: false }
                     : current,
                 );
@@ -1565,10 +1786,12 @@ export function App() {
           if (!disposed) {
             const delay = RUN_SOCKET_RECONNECT_DELAYS_MS[reconnectAttempt];
             if (delay === undefined) {
+              finishCreatingSession();
               setConnectionStatus("connecting");
               setSessionError(
-                activeSessionId,
+                sessionId,
                 "Run socket disconnected. Refresh or switch sessions to reconnect.",
+                generation,
               );
               return;
             }
@@ -1582,17 +1805,25 @@ export function App() {
         }
       };
       socket.onerror = () => {
-        if (socketRef.current === socket) {
+        if (
+          socketRef.current === socket &&
+          isCurrentSessionSelection(sessionId, generation)
+        ) {
           pendingFirstMessageRef.current = null;
-          if (activeSessionId) {
-            getRuntimeState(activeSessionId)
-              .then((nextRuntimeState) =>
-                applyRuntimeState({ ...nextRuntimeState, connected: false }),
-              )
+          finishCreatingSession();
+          if (sessionId) {
+            getRuntimeState(sessionId)
+              .then((nextRuntimeState) => {
+                if (isCurrentSessionSelection(sessionId, generation)) {
+                  applyRuntimeState({ ...nextRuntimeState, connected: false });
+                }
+              })
               .catch(() => {
-                runningSessionIdRef.current = "";
-                pendingSentMessageRef.current = "";
-                setBusy(false);
+                if (isCurrentSessionSelection(sessionId, generation)) {
+                  runningSessionIdRef.current = "";
+                  pendingSentMessageRef.current = "";
+                  setBusy(false);
+                }
               });
           } else {
             runningSessionIdRef.current = "";
@@ -1618,7 +1849,9 @@ export function App() {
     appendStreamingDelta,
     applyRuntimeState,
     clearLiveTurnState,
+    finishCreatingSession,
     handleSessionRequestError,
+    isCurrentSessionSelection,
     markSessionActive,
     markSessionLocked,
     refreshActiveSession,
@@ -1691,6 +1924,7 @@ export function App() {
     return models.filter((model) => model.toLowerCase().includes(query));
   }, [modelSearch, providerModels?.models, selectedModelProviderView?.default_model]);
   const composerDisabled =
+    creatingSession ||
     activeSessionLocked ||
     currentSessionRunning ||
     currentSessionMcpReloading ||
@@ -1745,7 +1979,14 @@ export function App() {
   }
 
   async function handleCreateSession() {
-    selectSession("");
+    if (creatingSessionRef.current) {
+      return;
+    }
+    if (activeSessionIdRef.current) {
+      selectSession("");
+    } else {
+      sessionSelectionGenerationRef.current += 1;
+    }
     setInspection(null);
     setMessages([]);
     setTaskState(null);
@@ -1776,20 +2017,29 @@ export function App() {
     }
   }
 
+  function handleSelectSession(sessionId: string) {
+    if (!creatingSessionRef.current) {
+      selectSession(sessionId);
+    }
+  }
+
   async function handleDeleteSession(sessionId: string) {
+    if (creatingSessionRef.current) {
+      return;
+    }
     if (!window.confirm("Delete this session?")) {
       return;
     }
     setError("");
     try {
       await deleteSession(sessionId);
-      setSessions((current) => {
-        const nextSessions = current.filter((session) => session.session_id !== sessionId);
-        if (activeSessionId === sessionId) {
-          selectSession(nextSessions[0]?.session_id ?? "");
-        }
-        return nextSessions;
-      });
+      const nextSessions = sessions.filter((session) => session.session_id !== sessionId);
+      setSessions((current) =>
+        current.filter((session) => session.session_id !== sessionId),
+      );
+      if (activeSessionIdRef.current === sessionId) {
+        selectSession(nextSessions[0]?.session_id ?? "");
+      }
     } catch (nextError) {
       setError(String(nextError));
     }
@@ -1806,7 +2056,7 @@ export function App() {
 
   async function submitMessage() {
     const content = draft.trim();
-    if (!content || composerDisabled) {
+    if (!content || composerDisabled || creatingSessionRef.current) {
       return;
     }
     if (!activeSessionId && selectedModelProvider && modelDraft.trim()) {
@@ -1815,6 +2065,13 @@ export function App() {
         setError(`Model provider '${selectedModelProvider}' requires ${modelProviderMissingFields(provider)}.`);
         return;
       }
+    }
+    const creatingDraftSession = !activeSessionId;
+    let firstMessagePending = false;
+    if (creatingDraftSession) {
+      creatingSessionRef.current = true;
+      setCreatingSession(true);
+      setModelPanelOpen(false);
     }
     setDraft("");
     pendingSentMessageRef.current = content;
@@ -1841,6 +2098,7 @@ export function App() {
           sessionId: session.session_id,
           content,
         };
+        firstMessagePending = true;
         selectSession(session.session_id);
         setSessions((current) => [session, ...current]);
         return;
@@ -1852,6 +2110,10 @@ export function App() {
       runningSessionIdRef.current = "";
       pendingSentMessageRef.current = "";
       setBusy(false);
+    } finally {
+      if (creatingDraftSession && !firstMessagePending) {
+        finishCreatingSession();
+      }
     }
   }
 
@@ -1936,7 +2198,12 @@ export function App() {
                 </button>
               </div>
             </div>
-            <button className="primary-button" type="button" onClick={handleCreateSession}>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={handleCreateSession}
+              disabled={creatingSession}
+            >
               <MessageSquarePlus size={17} />
               New session
             </button>
@@ -1968,7 +2235,8 @@ export function App() {
                             <button
                               className="session-select"
                               type="button"
-                              onClick={() => selectSession(session.session_id)}
+                              onClick={() => handleSelectSession(session.session_id)}
+                              disabled={creatingSession}
                             >
                               <span className="session-title">
                                 {session.locked ? (
@@ -1987,6 +2255,7 @@ export function App() {
                               type="button"
                               onClick={() => void handleDeleteSession(session.session_id)}
                               title="Delete session"
+                              disabled={creatingSession}
                             >
                               <Trash2 size={15} />
                             </button>
@@ -2033,7 +2302,7 @@ export function App() {
                       setWorkspacePickerOpen(true);
                       void loadWorkspaceBrowser(workspaceDraft.trim() || undefined);
                     }}
-                    disabled={busy}
+                    disabled={busy || creatingSession}
                   >
                     <Folder size={15} />
                     Browse
