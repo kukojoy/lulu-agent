@@ -31,7 +31,14 @@ class ErrorType(StrEnum):
     USER_CANCELLED = "user_cancelled"
 
     # Storage / lookup
+    STORAGE = "storage_error"
     NOT_FOUND = "not_found"
+    SESSION_NOT_FOUND = "session_not_found"
+    SESSION_WORKSPACE_UNAVAILABLE = "session_workspace_unavailable"
+
+    # Session control
+    SESSION_RUNNING = "session_running"
+    SESSION_NOT_ACTIVE = "session_not_active"
 
     # Configuration
     CONFIGURATION = "configuration_error"
@@ -53,7 +60,12 @@ ERROR_OUTPUT_TRUNCATED = ErrorType.OUTPUT_TRUNCATED
 ERROR_PERMISSION_DENIED = ErrorType.PERMISSION_DENIED
 ERROR_APPROVAL_DENIED = ErrorType.APPROVAL_DENIED
 ERROR_USER_CANCELLED = ErrorType.USER_CANCELLED
+ERROR_STORAGE = ErrorType.STORAGE
 ERROR_NOT_FOUND = ErrorType.NOT_FOUND
+ERROR_SESSION_NOT_FOUND = ErrorType.SESSION_NOT_FOUND
+ERROR_SESSION_WORKSPACE_UNAVAILABLE = ErrorType.SESSION_WORKSPACE_UNAVAILABLE
+ERROR_SESSION_RUNNING = ErrorType.SESSION_RUNNING
+ERROR_SESSION_NOT_ACTIVE = ErrorType.SESSION_NOT_ACTIVE
 ERROR_CONFIGURATION = ErrorType.CONFIGURATION
 
 ERROR_TYPES = frozenset(ErrorType)

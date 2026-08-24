@@ -9,6 +9,7 @@ from lulu_agent.server.http_errors import (
     conflict_error,
     internal_error,
     not_found_error,
+    session_error,
     skill_not_found_error,
 )
 from lulu_agent.server.runner import ServerRunner, ServerRunnerError
@@ -27,6 +28,14 @@ except ImportError:  # pragma: no cover - server dependency guard
 
 class MessageRequest(BaseModel):
     content: str
+
+
+class CreateSessionRequest(BaseModel):
+    workspace: str | None = None
+
+
+class DirectoryBrowseRequest(BaseModel):
+    path: str | None = None
 
 
 class ModelSwitchRequest(BaseModel):
@@ -61,15 +70,27 @@ def create_app(runner: ServerRunner | None = None):
         return {"sessions": runner.list_sessions(limit=limit)}
 
     @app.post("/sessions")
-    def create_session() -> dict[str, Any]:
-        return {"session": runner.create_session()}
+    def create_session(request: CreateSessionRequest | None = None) -> dict[str, Any]:
+        try:
+            return {"session": runner.create_session(workspace=request.workspace if request else None)}
+        except SessionStoreError as exc:
+            raise session_error(exc) from exc
+
+    @app.post("/runtime/workspace/browse")
+    def browse_workspace(request: DirectoryBrowseRequest | None = None) -> dict[str, Any]:
+        try:
+            return runner.browse_workspace(request.path if request else None)
+        except SessionStoreError as exc:
+            raise session_error(exc) from exc
 
     @app.delete("/sessions/{session_id}")
     def delete_session(session_id: str) -> dict[str, Any]:
         try:
             metadata = runner.delete_session(session_id)
+        except ServerRunnerError as exc:
+            raise conflict_error(exc) from exc
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
         return {"deleted": True, "session": metadata}
 
     @app.get("/sessions/{session_id}")
@@ -77,49 +98,49 @@ def create_app(runner: ServerRunner | None = None):
         try:
             return runner.inspect_session(session_id)
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/messages")
     def load_messages(session_id: str) -> dict[str, Any]:
         try:
             return {"messages": runner.load_messages(session_id)}
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/context")
     def inspect_context(session_id: str) -> dict[str, Any]:
         try:
             return runner.inspect_context(session_id)
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/task")
     def get_task_state(session_id: str) -> dict[str, Any]:
         try:
             return {"task_state": runner.get_task_state(session_id)}
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/trace")
     def get_trace(session_id: str, turn_id: str | None = None) -> dict[str, Any]:
         try:
             return {"timeline": runner.get_trace_timeline(session_id, turn_id=turn_id)}
         except (SessionStoreError, TraceStoreError) as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/trace/turns")
     def get_trace_turns(session_id: str) -> dict[str, Any]:
         try:
             return {"turns": runner.get_trace_turns(session_id)}
         except (SessionStoreError, TraceStoreError) as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/sessions/{session_id}/runtime")
     def get_runtime_state(session_id: str) -> dict[str, Any]:
         try:
             return {"runtime": runner.get_runtime_state(session_id)}
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.get("/runtime/model")
     def get_model_config() -> dict[str, Any]:
@@ -133,7 +154,7 @@ def create_app(runner: ServerRunner | None = None):
         try:
             return {"model_config": runner.get_session_model_config(session_id)}
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
         except ConfigError as exc:
             raise internal_error(exc) from exc
 
@@ -156,7 +177,7 @@ def create_app(runner: ServerRunner | None = None):
         try:
             return {"model_config": runner.update_session_model(session_id, request.provider, request.model)}
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
         except ServerRunnerError as exc:
             raise conflict_error(exc) from exc
         except ConfigError as exc:
@@ -167,14 +188,14 @@ def create_app(runner: ServerRunner | None = None):
         try:
             return runner.list_mcp_tools(session_id)
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
 
     @app.post("/sessions/{session_id}/mcp/reload")
     def reload_mcp_tools(session_id: str) -> dict[str, Any]:
         try:
             return runner.reload_mcp_tools(session_id)
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
         except ServerRunnerError as exc:
             raise conflict_error(exc) from exc
 
@@ -202,7 +223,7 @@ def create_app(runner: ServerRunner | None = None):
         except ServerRunnerError as exc:
             raise conflict_error(exc) from exc
         except SessionStoreError as exc:
-            raise not_found_error(exc) from exc
+            raise session_error(exc) from exc
         except ConfigError as exc:
             raise internal_error(exc) from exc
 

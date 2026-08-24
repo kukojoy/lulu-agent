@@ -6,10 +6,10 @@
 
 ## 主要能力
 
-- 本地 Web GUI，支持会话列表、聊天、工具调用展示、任务状态、Trace、Memory、Skills 和 MCP 工具查看。
+- 本地 Web GUI，支持按 workspace 分组的会话列表、创建会话前选择 workspace、聊天、工具调用展示、任务状态、Trace、Memory、Skills 和 MCP 工具查看。
 - CLI 入口，支持会话恢复、会话查看和 context inspect。
 - OpenAI-compatible 模型服务，支持 streaming 和 tool calling。
-- 本地 session 持久化，可以恢复历史会话。
+- 全局 session / trace 持久化，可以跨 workspace 恢复历史会话并查看运行诊断；workspace 失效时会锁定 session，保留数据等待原路径恢复或用户显式删除。
 - 规范化 session transcript：内部使用 `Message` / `Turn` / `Compression` / `TaskState` 运行态模型，落盘统一使用 session record JSONL。
 - 本地文件工具：列文件、读文件、写文件、替换文件、全文搜索。
 - Shell 工具：执行本地命令，并对高风险命令做安全拦截或确认。
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 python setup/lulu_setup.py
 ```
 
-首次使用前建议先运行这一步，确保 `~/.lulu/` 里的 `memory.md`、`skills`、`mcp.json` 和 `models.json` 都已准备好。
+首次使用前建议先运行这一步，确保 `~/.lulu/` 里的 `memory/MEMORY.md`、`skills`、`mcp.json` 和 `models.json` 都已准备好。session 和 trace 目录会在首次写入时自动创建。
 
 如果使用 Web GUI，还需要安装 GUI 依赖：
 
@@ -111,7 +111,7 @@ Windows 可使用：
 
 `lulu.sh` / `lulu.bat` 会同时启动后端和 GUI，等待后端 `/health` 与前端页面可用后再打开浏览器。按 `Ctrl+C` 会停止两个进程。
 
-启动脚本使用当前运行环境 (推荐使用 conda/uv/nvm) 中的 `python` / `python.exe` 和 `npm` / `npm.cmd`。如果默认端口已被占用，会自动尝试后续端口。
+启动脚本使用当前运行环境 (推荐使用 conda/uv/nvm) 中的 `python` / `python.exe` 和 `npm` / `npm.cmd`。如果默认端口已被占用，会自动尝试后续端口。启动脚本所在 shell 的当前目录是新会话的默认 workspace；GUI 创建会话时也可以浏览并选择其他目录。
 
 ## 使用 CLI
 
@@ -154,13 +154,23 @@ python -m cli.main --inspect-context <session_id>
 
 ## 本地数据
 
-项目工作目录下的 `.lulu/` 保存当前项目的运行状态：
+运行数据统一保存在用户目录 `~/.lulu/`：
 
 ```text
-.lulu/
+~/.lulu/
   sessions/
   traces/
+  memory/MEMORY.md
+  skills/<name>/SKILL.md
+  models.json
+  mcp.json
 ```
+
+`sessions/` 保存 transcript、turn、compression 和 task state；`traces/` 保存 runtime events。两者都以 `session_id` 对齐，删除 session 时会同步删除对应 trace。每个 session metadata 固定记录创建时选择的 workspace，恢复会话后文件工具、文本搜索、shell cwd、路径 safety 和项目 `AGENTS.md` 都以该 workspace 为准。
+
+如果绑定的 workspace 被移动、删除、替换为文件或当前不可访问，session 会动态进入锁定状态。锁定期间只能在列表中查看状态、重新检查 workspace 或显式删除 session；继续会话以及 transcript、context、task、trace、model 和 MCP 等 session 操作都会被拒绝。session 和 trace 文件不会因为 workspace 失效而自动删除或迁移；原路径恢复为可访问目录后，重新检查即可自动解锁。
+
+session 锁定和存储失败通过统一的结构化错误契约返回；HTTP/WebSocket 会保留 `session_workspace_unavailable`、`session_not_found`、`storage_error` 等稳定错误码。GUI 的锁定状态只使用 `locked/lock_message`，不会把动态状态写回 session index。
 
 session JSONL 每行使用统一 record envelope：
 
@@ -172,15 +182,7 @@ session JSONL 每行使用统一 record envelope：
 
 后端结构上，`server/` 只负责本地 Web GUI 的 HTTP/WebSocket 接入和运行态编排；session、task、trace、memory、skills、model provider 等可复用查询视图由 `interaction/` service 整理。
 
-跨项目长期数据保存在用户目录：
-
-```text
-~/.lulu/
-  memory/MEMORY.md
-  skills/<name>/SKILL.md
-  models.json
-  mcp.json
-```
+旧版本保存在项目目录 `.lulu/sessions` / `.lulu/traces` 的数据不会自动迁移。需要保留旧数据时，应在后续使用单独的一次性迁移流程，不要直接混合两套 index 或 JSONL。
 
 ## Memory
 
@@ -226,7 +228,7 @@ MCP 用来接入外部工具。当前支持 stdio MCP server。
 ~/.lulu/mcp.json
 ```
 
-启动时 lulu-agent 会读取该配置，发现 MCP tools，并把它们注册为可调用工具。
+启动时 lulu-agent 会读取该配置，发现 MCP tools，并把它们注册为可调用工具。AgentLoop/MCP 初始化按 session 隔离，单个 session 的慢连接不会持有 server 全局锁或阻塞其他 session 的运行状态查询。
 
 ## Trace
 

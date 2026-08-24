@@ -1,9 +1,10 @@
-import os
 import platform
 import time
 import threading
 
 from datetime import datetime
+from functools import wraps
+from pathlib import Path
 
 from lulu_agent.context.compressor import compress_turns
 from lulu_agent.context.manager import ContextManager
@@ -30,8 +31,17 @@ from lulu_agent.runtime.session.message import Message
 from lulu_agent.runtime.review import ReviewerType, ReviewStatus
 from lulu_agent.runtime.session.turn import TurnExitReason, TurnRuntime, TurnStatus
 from lulu_agent.runtime.utils import get_local_time
+from lulu_agent.runtime.workspace import (
+    activate_session,
+    get_workspace_status,
+    set_session_workspace,
+)
 
-from lulu_agent.storage.session_store import SessionStore
+from lulu_agent.storage.session_store import (
+    SessionStore,
+    SessionWorkspaceUnavailableError,
+)
+from lulu_agent.memory.store import MemoryStore
 from lulu_agent.tools import ToolRegistry, ToolResult, create_tool_registry
 from lulu_agent.tools.runtime import ToolCall, ToolRuntime
 from lulu_agent.reviewers.base import BaseReviewer
@@ -55,13 +65,23 @@ APPROVAL_DENIED_MESSAGE = (
 )
 
 
+def _activate_session_workspace(run):
+    @wraps(run)
+    def wrapper(self, user_input: str) -> str:
+        self.cwd = self._require_session_workspace()
+        with activate_session(self.session_id):
+            return run(self, user_input)
+
+    return wrapper
+
+
 class AgentLoop:
     def __init__(
         self,
         llm_client: LLMClient | None = None,
         tool_registry: ToolRegistry | None = None,
         context_manager: ContextManager | None = None,
-        memory_store=None,
+        memory_store: MemoryStore | None = None,
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         event_sink: EventSink | None = None,
@@ -73,8 +93,9 @@ class AgentLoop:
         self.tool_runtime = ToolRuntime(self.tool_registry)
         self.session_store = session_store
         self.session_id = session_id
+        self.cwd = self._require_session_workspace()
         self.context_manager = context_manager or ContextManager(
-            memory_store=memory_store,
+            memory_store=memory_store or MemoryStore(project_path=self.cwd / "AGENTS.md"),
             session_store=session_store,
             session_id=session_id,
         )
@@ -86,6 +107,7 @@ class AgentLoop:
         self.turn_runtime: TurnRuntime | None = None
         self._interrupt_requested = threading.Event()
 
+    @_activate_session_workspace
     def run(self, user_input: str) -> str:
         self._interrupt_requested.clear()
         self.turn_runtime = TurnRuntime()
@@ -247,7 +269,7 @@ class AgentLoop:
             f"- turn_id: {turn_runtime.turn_id if turn_runtime else 'none'}",
             "",
             "Workspace:",
-            f"- cwd: {os.getcwd()}",
+            f"- cwd: {self.cwd or 'unknown'}",
         ]
         content = "\n".join(lines)
         return {"name": "runtime_environment", "content": content}
@@ -335,6 +357,7 @@ class AgentLoop:
             }
 
     def _interrupt_checkpoint(self) -> None:
+        self._require_session_workspace()
         if self._interrupt_requested.is_set():
             raise KeyboardInterrupt
 
@@ -419,6 +442,7 @@ class AgentLoop:
         if check_result is not None:
             result = check_result
         else:
+            self._interrupt_checkpoint()
             result = self.tool_runtime.run(self._tool_call_with_runtime_args(tool_call))
 
         # === event emit and turn state update ===
@@ -549,3 +573,16 @@ class AgentLoop:
                 payload=payload,
             )
         )
+
+    # workspace runtime
+    def _require_session_workspace(self) -> Path:
+        """检查并获取当前 session 的工作空间"""
+        if not self.session_store or not self.session_id:
+            return Path.cwd()
+        metadata = self.session_store.get_session_metadata(self.session_id)
+        status = get_workspace_status(metadata.get("cwd"))
+        if not status.available or status.path is None:
+            raise SessionWorkspaceUnavailableError(
+                status.message or "Session workspace is unavailable."
+            )
+        return set_session_workspace(self.session_id, status.path)

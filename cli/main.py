@@ -57,8 +57,9 @@ def create_agent(
     session_service = SessionInteractionService(store)
     if args.resume:
         session_id = session_service.resume_session(args.resume)
+        metadata = session_service.get_session_metadata(session_id)
     else:
-        metadata = session_service.create_session(cwd=Path.cwd())
+        metadata = session_service.create_session(workspace=Path.cwd())
         session_id = metadata["session_id"]
 
     return AgentLoop(

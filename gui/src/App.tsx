@@ -1,13 +1,17 @@
 import {
   Activity,
   AlertCircle,
+  ArrowUp,
   Bot,
   BookOpen,
   Brain,
+  Check,
   ChevronDown,
   ChevronRight,
+  Folder,
   History,
   ListTree,
+  LockKeyhole,
   MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -18,11 +22,14 @@ import {
   Square,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
+  ApiError,
+  browseWorkspace,
   createSession,
   deleteSession,
   getMemory,
@@ -47,6 +54,7 @@ import {
 import type {
   ApprovalRequestView,
   ChatItem,
+  DirectoryBrowseView,
   MemoryView,
   McpToolsView,
   ModelConfigView,
@@ -65,6 +73,12 @@ import type {
 
 type InspectorView = "trace" | "task" | "memory" | "skills" | "mcp";
 type ConnectionStatus = "draft" | "connecting" | "ready" | "reconnecting";
+type SessionWorkspaceGroup = {
+  key: string;
+  label: string;
+  title: string;
+  sessions: SessionSummary[];
+};
 
 const RUN_SOCKET_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000];
 
@@ -90,6 +104,17 @@ function formatTraceTimestamp(value?: string | null): string {
 
 function formatDate(value?: string | null): string {
   return formatTraceTimestamp(value).split(" ")[0];
+}
+
+function workspaceLabel(cwd?: string | null): string {
+  if (!cwd) {
+    return "No workspace";
+  }
+  if (cwd === "/") {
+    return "Root";
+  }
+  const parts = cwd.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || cwd;
 }
 
 type TraceTimelineItemView = TraceTurnView["items"][number];
@@ -322,7 +347,7 @@ function formatServerError(payload: Record<string, unknown>): string {
   if (code === "session_not_found") {
     return "Session not found.";
   }
-  if (code === "config_error") {
+  if (code === "configuration_error") {
     return `Configuration error: ${message}`;
   }
   if (code === "approval_not_found") {
@@ -644,6 +669,12 @@ export function App() {
   const [inspectorWidth, setInspectorWidth] = useState(560);
   const [inspectorView, setInspectorView] = useState<InspectorView>("trace");
   const [draft, setDraft] = useState("");
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
+  const [workspaceBrowser, setWorkspaceBrowser] = useState<DirectoryBrowseView | null>(null);
+  const [workspaceBrowserLoading, setWorkspaceBrowserLoading] = useState(false);
+  const [workspaceBrowserError, setWorkspaceBrowserError] = useState("");
+  const [collapsedWorkspaceGroups, setCollapsedWorkspaceGroups] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("draft");
@@ -661,9 +692,40 @@ export function App() {
   const pendingSentMessageRef = useRef("");
   const pendingToolReasoningRef = useRef("");
   const lastRuntimeErrorRef = useRef<{ sessionId: string; message: string } | null>(null);
+  const activeSessionIdRef = useRef("");
+  const defaultWorkspaceRef = useRef("");
   const reconnectTimerRef = useRef<number | null>(null);
   const inspectorResizeRef = useRef({ startX: 0, startWidth: 0 });
   const [modelPanelStyle, setModelPanelStyle] = useState<CSSProperties>({});
+  const activeSession = sessions.find((session) => session.session_id === activeSessionId);
+  const activeSessionLocked = Boolean(activeSession?.locked);
+
+  const setSessionError = useCallback((sessionId: string, message: string) => {
+    if (activeSessionIdRef.current === sessionId) {
+      setError(message);
+    }
+  }, []);
+
+  const selectSession = useCallback((sessionId: string) => {
+    activeSessionIdRef.current = sessionId;
+    setError("");
+    setActiveSessionId(sessionId);
+  }, []);
+
+  const markSessionLocked = useCallback((sessionId: string, message: string) => {
+    setSessions((current) =>
+      current.map((session) =>
+        session.session_id === sessionId
+          ? {
+              ...session,
+              active: false,
+              locked: true,
+              lock_message: message,
+            }
+          : session,
+      ),
+    );
+  }, []);
 
   const applyRuntimeState = useCallback((nextRuntimeState: RuntimeState) => {
     setRuntimeState(nextRuntimeState);
@@ -694,10 +756,45 @@ export function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
+  const loadWorkspaceBrowser = useCallback(async (path?: string) => {
+    setWorkspaceBrowserLoading(true);
+    setWorkspaceBrowserError("");
+    try {
+      const nextBrowser = await browseWorkspace(path);
+      setWorkspaceBrowser(nextBrowser);
+      return nextBrowser;
+    } catch (nextError) {
+      setWorkspaceBrowserError(String(nextError));
+      return null;
+    } finally {
+      setWorkspaceBrowserLoading(false);
+    }
+  }, []);
+
+  const closeWorkspacePicker = useCallback(() => {
+    setWorkspacePickerOpen(false);
+    setWorkspaceBrowserError("");
+  }, []);
+
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
     setSessions(nextSessions);
   }, []);
+
+  const handleSessionRequestError = useCallback(
+    (sessionId: string, nextError: unknown) => {
+      if (nextError instanceof ApiError && nextError.code === "session_workspace_unavailable") {
+        setSessionError(sessionId, "");
+        markSessionLocked(sessionId, nextError.message);
+        void refreshSessions().catch((refreshError) =>
+          setSessionError(sessionId, String(refreshError)),
+        );
+        return;
+      }
+      setSessionError(sessionId, String(nextError));
+    },
+    [markSessionLocked, refreshSessions, setSessionError],
+  );
 
   const refreshModelRuntime = useCallback(async () => {
     const [configResult, providersResult] = await Promise.allSettled([
@@ -786,12 +883,12 @@ export function App() {
   );
 
   const refreshTraceTurns = useCallback(async () => {
-    if (!activeSessionId) {
+    if (!activeSessionId || activeSessionLocked) {
       setTraceTurns([]);
       return;
     }
     setTraceTurns(await getTraceTurns(activeSessionId));
-  }, [activeSessionId]);
+  }, [activeSessionId, activeSessionLocked]);
 
   const refreshSession = useCallback(
     async (sessionId: string) => {
@@ -845,11 +942,24 @@ export function App() {
       setMcpTools(null);
       return;
     }
+    if (activeSessionLocked) {
+      setInspection(null);
+      setMessages([]);
+      setTaskState(null);
+      setRuntimeState(null);
+      setLiveToolItems([]);
+      setTraceTurns([]);
+      setMemoryView(null);
+      setSkillList(null);
+      setSelectedSkill(null);
+      setMcpTools(null);
+      return;
+    }
     if (pendingFirstMessageRef.current?.sessionId === activeSessionId) {
       return;
     }
     await refreshSession(activeSessionId);
-  }, [activeSessionId, refreshSession]);
+  }, [activeSessionId, activeSessionLocked, refreshSession]);
 
   const refreshMemory = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
@@ -975,11 +1085,11 @@ export function App() {
       if (latestProviders) {
         setModelProviders(latestProviders);
       }
-      throw nextError;
+      handleSessionRequestError(sessionId, nextError);
     } finally {
       setModelSwitchingSessionId((current) => (current === sessionId ? "" : current));
     }
-  }, [activeSessionId, applyRuntimeState, modelConfig?.max_retries, modelConfig?.timeout_seconds, modelDraft, selectedModelProvider]);
+  }, [activeSessionId, applyRuntimeState, handleSessionRequestError, modelConfig?.max_retries, modelConfig?.timeout_seconds, modelDraft, selectedModelProvider]);
 
   const reloadMcpToolsForActiveSession = useCallback(async () => {
     if (!activeSessionId || runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
@@ -993,13 +1103,16 @@ export function App() {
       const result = await reloadMcpTools(sessionId);
       setMcpTools(result.tools);
       applyRuntimeState(await getRuntimeState(sessionId));
-      refreshSessions().catch((nextError) => setError(String(nextError)));
+      refreshSessions().catch((nextError) => setSessionError(sessionId, String(nextError)));
+    } catch (nextError) {
+      handleSessionRequestError(sessionId, nextError);
     } finally {
       setMcpReloadingSessionId((current) => (current === sessionId ? "" : current));
     }
   }, [
     activeSessionId,
     applyRuntimeState,
+    handleSessionRequestError,
     refreshSessions,
     runtimeState?.active,
     runtimeState?.session_id,
@@ -1069,7 +1182,7 @@ export function App() {
   const runSessionMessage = useCallback(
     (sessionId: string, content: string) => {
       if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-        setError("Run socket is not ready.");
+        setSessionError(sessionId, "Run socket is not ready.");
         clearLiveTurnState();
         runningSessionIdRef.current = "";
         setBusy(false);
@@ -1090,12 +1203,26 @@ export function App() {
       }));
       socketRef.current.send(JSON.stringify({ type: "user_message", content }));
     },
-    [clearLiveTurnState],
+    [clearLiveTurnState, setSessionError],
   );
+
+  useLayoutEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+    setError("");
+  }, [activeSessionId]);
 
   useEffect(() => {
     refreshSessions().catch((nextError) => setError(String(nextError)));
   }, [refreshSessions]);
+
+  useEffect(() => {
+    browseWorkspace()
+      .then((workspace) => {
+        defaultWorkspaceRef.current = workspace.path;
+        setWorkspaceDraft((current) => current || workspace.path);
+      })
+      .catch((nextError) => setError(String(nextError)));
+  }, []);
 
   useEffect(() => {
     refreshModelRuntime().catch((nextError) => setError(String(nextError)));
@@ -1141,8 +1268,10 @@ export function App() {
   }, [modelConfig?.model, modelConfig?.provider, modelPanelOpen]);
 
   useEffect(() => {
-    refreshActiveSession().catch((nextError) => setError(String(nextError)));
-  }, [refreshActiveSession]);
+    refreshActiveSession().catch((nextError) =>
+      handleSessionRequestError(activeSessionId, nextError),
+    );
+  }, [activeSessionId, handleSessionRequestError, refreshActiveSession]);
 
   useEffect(() => {
     setExpandedTraceTurns(new Set());
@@ -1161,7 +1290,9 @@ export function App() {
       return;
     }
     if (inspectorView === "trace") {
-      refreshTraceTurns().catch((nextError) => setError(String(nextError)));
+      refreshTraceTurns().catch((nextError) =>
+        handleSessionRequestError(activeSessionId, nextError),
+      );
     }
     if (runtimeState?.session_id !== activeSessionId || !runtimeState.active) {
       setMemoryView(null);
@@ -1171,16 +1302,23 @@ export function App() {
       return;
     }
     if (inspectorView === "memory") {
-      refreshMemory().catch((nextError) => setError(String(nextError)));
+      refreshMemory().catch((nextError) =>
+        handleSessionRequestError(activeSessionId, nextError),
+      );
     }
     if (inspectorView === "skills") {
-      refreshSkills().catch((nextError) => setError(String(nextError)));
+      refreshSkills().catch((nextError) =>
+        handleSessionRequestError(activeSessionId, nextError),
+      );
     }
     if (inspectorView === "mcp") {
-      refreshMcpTools().catch((nextError) => setError(String(nextError)));
+      refreshMcpTools().catch((nextError) =>
+        handleSessionRequestError(activeSessionId, nextError),
+      );
     }
   }, [
     activeSessionId,
+    handleSessionRequestError,
     inspectorView,
     refreshMemory,
     refreshTraceTurns,
@@ -1194,6 +1332,7 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let reconnectAttempt = 0;
+    let sessionUnavailable = false;
 
     if (reconnectTimerRef.current !== null) {
       window.clearTimeout(reconnectTimerRef.current);
@@ -1202,6 +1341,10 @@ export function App() {
     socketRef.current?.close();
     clearLiveTurnState();
     if (!activeSessionId) {
+      setConnectionStatus("draft");
+      return;
+    }
+    if (activeSessionLocked) {
       setConnectionStatus("draft");
       return;
     }
@@ -1229,7 +1372,7 @@ export function App() {
               restoreStreamingMessageFromTrace(
                 nextRuntimeState.session_id,
                 nextRuntimeState.active_turn_id,
-              ).catch((nextError) => setError(String(nextError)));
+              ).catch((nextError) => setSessionError(activeSessionId, String(nextError)));
             }
           }
           const pending = pendingFirstMessageRef.current;
@@ -1238,8 +1381,12 @@ export function App() {
             void runSessionMessage(pending.sessionId, pending.content);
           }
           if (isReconnect) {
-            refreshActiveSession().catch((nextError) => setError(String(nextError)));
-            refreshSessions().catch((nextError) => setError(String(nextError)));
+            refreshActiveSession().catch((nextError) =>
+              handleSessionRequestError(activeSessionId, nextError),
+            );
+            refreshSessions().catch((nextError) =>
+              setSessionError(activeSessionId, String(nextError)),
+            );
           }
           return;
         }
@@ -1249,12 +1396,21 @@ export function App() {
             setDraft(pendingSentMessageRef.current);
           }
           const message = String(event.payload.message ?? "Event stream error");
+          if (code === "session_workspace_unavailable") {
+            sessionUnavailable = true;
+            setSessionError(activeSessionId, "");
+            markSessionLocked(activeSessionId, message);
+            setConnectionStatus("draft");
+            void refreshSessions().catch((nextError) =>
+              setSessionError(activeSessionId, String(nextError)),
+            );
+          }
           const duplicatesRuntimeError =
             code === "unexpected_error" &&
             lastRuntimeErrorRef.current?.sessionId === activeSessionId &&
             lastRuntimeErrorRef.current.message === message;
-          if (!duplicatesRuntimeError) {
-            setError(formatServerError(event.payload));
+          if (code !== "session_workspace_unavailable" && !duplicatesRuntimeError) {
+            setSessionError(activeSessionId, formatServerError(event.payload));
           }
           pendingFirstMessageRef.current = null;
           runningSessionIdRef.current = "";
@@ -1303,7 +1459,9 @@ export function App() {
         }
         if (event.type === "review_summary") {
           window.setTimeout(() => {
-            refreshTraceTurns().catch((nextError) => setError(String(nextError)));
+            refreshTraceTurns().catch((nextError) =>
+              setSessionError(activeSessionId, String(nextError)),
+            );
           }, 100);
           return;
         }
@@ -1374,17 +1532,23 @@ export function App() {
               }
             })
             .catch((nextError) => {
-              setError(String(nextError));
+              setSessionError(activeSessionId, String(nextError));
               runningSessionIdRef.current = "";
               pendingSentMessageRef.current = "";
               setBusy(false);
             });
-          refreshSessions().catch((nextError) => setError(String(nextError)));
+          refreshSessions().catch((nextError) =>
+            setSessionError(activeSessionId, String(nextError)),
+          );
         }
       });
       socketRef.current = socket;
       socket.onclose = () => {
         if (socketRef.current === socket) {
+          if (sessionUnavailable) {
+            socketRef.current = null;
+            return;
+          }
           if (activeSessionId) {
             getRuntimeState(activeSessionId)
               .then((nextRuntimeState) =>
@@ -1402,7 +1566,10 @@ export function App() {
             const delay = RUN_SOCKET_RECONNECT_DELAYS_MS[reconnectAttempt];
             if (delay === undefined) {
               setConnectionStatus("connecting");
-              setError("Run socket disconnected. Refresh or switch sessions to reconnect.");
+              setSessionError(
+                activeSessionId,
+                "Run socket disconnected. Refresh or switch sessions to reconnect.",
+              );
               return;
             }
             reconnectAttempt += 1;
@@ -1447,18 +1614,42 @@ export function App() {
     };
   }, [
     activeSessionId,
+    activeSessionLocked,
     appendStreamingDelta,
     applyRuntimeState,
     clearLiveTurnState,
+    handleSessionRequestError,
     markSessionActive,
+    markSessionLocked,
     refreshActiveSession,
     refreshSessions,
     runSessionMessage,
+    setSessionError,
   ]);
 
   const chatItems = useMemo(() => transcriptToChatItems(messages, inspection), [inspection, messages]);
   const visibleChatItems = useMemo(() => [...chatItems, ...liveToolItems], [chatItems, liveToolItems]);
-  const activeSession = sessions.find((session) => session.session_id === activeSessionId);
+  const groupedSessions = useMemo<SessionWorkspaceGroup[]>(() => {
+    const groups = new Map<string, SessionWorkspaceGroup>();
+    const orderedGroups: SessionWorkspaceGroup[] = [];
+    for (const session of sessions) {
+      const key = session.cwd || "__no_workspace__";
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          label: workspaceLabel(session.cwd),
+          title: session.cwd || "No workspace",
+          sessions: [],
+        };
+        groups.set(key, group);
+        orderedGroups.push(group);
+      }
+      group.sessions.push(session);
+    }
+    return orderedGroups;
+  }, [sessions]);
+  const activeSessionWorkspaceKey = activeSession?.cwd || "__no_workspace__";
   const lastAssistantContent = useMemo(() => {
     for (let index = chatItems.length - 1; index >= 0; index -= 1) {
       const item = chatItems[index];
@@ -1500,12 +1691,15 @@ export function App() {
     return models.filter((model) => model.toLowerCase().includes(query));
   }, [modelSearch, providerModels?.models, selectedModelProviderView?.default_model]);
   const composerDisabled =
+    activeSessionLocked ||
     currentSessionRunning ||
     currentSessionMcpReloading ||
     currentSessionModelSwitching ||
     Boolean(activeSessionId && connectionStatus !== "ready");
   const statusLabel = !activeSessionId
     ? "Draft"
+    : activeSessionLocked
+      ? "Workspace unavailable"
     : connectionStatus === "reconnecting"
       ? "Reconnecting"
       : connectionStatus !== "ready"
@@ -1543,9 +1737,15 @@ export function App() {
     textarea.style.height = `${textarea.scrollHeight}px`;
   }, [draft]);
 
+  function toggleWorkspaceGroup(key: string) {
+    setCollapsedWorkspaceGroups((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  }
+
   async function handleCreateSession() {
-    setError("");
-    setActiveSessionId("");
+    selectSession("");
     setInspection(null);
     setMessages([]);
     setTaskState(null);
@@ -1560,6 +1760,20 @@ export function App() {
     pendingSentMessageRef.current = "";
     setBusy(false);
     setDraft("");
+    setWorkspacePickerOpen(false);
+    setWorkspaceBrowser(null);
+    setWorkspaceBrowserError("");
+    if (defaultWorkspaceRef.current) {
+      setWorkspaceDraft(defaultWorkspaceRef.current);
+      return;
+    }
+    try {
+      const workspace = await browseWorkspace();
+      defaultWorkspaceRef.current = workspace.path;
+      setWorkspaceDraft(workspace.path);
+    } catch (nextError) {
+      setError(String(nextError));
+    }
   }
 
   async function handleDeleteSession(sessionId: string) {
@@ -1572,10 +1786,19 @@ export function App() {
       setSessions((current) => {
         const nextSessions = current.filter((session) => session.session_id !== sessionId);
         if (activeSessionId === sessionId) {
-          setActiveSessionId(nextSessions[0]?.session_id ?? "");
+          selectSession(nextSessions[0]?.session_id ?? "");
         }
         return nextSessions;
       });
+    } catch (nextError) {
+      setError(String(nextError));
+    }
+  }
+
+  async function handleRecheckWorkspace() {
+    setError("");
+    try {
+      await refreshSessions();
     } catch (nextError) {
       setError(String(nextError));
     }
@@ -1602,7 +1825,7 @@ export function App() {
     setMessages((current) => [...current, { role: "user", content }]);
     try {
       if (!activeSessionId) {
-        const session = await createSession();
+        const session = await createSession(workspaceDraft.trim() || undefined);
         if (selectedModelProvider && modelDraft.trim()) {
           await updateSessionModel(session.session_id, selectedModelProvider, modelDraft.trim());
         }
@@ -1618,7 +1841,7 @@ export function App() {
           sessionId: session.session_id,
           content,
         };
-        setActiveSessionId(session.session_id);
+        selectSession(session.session_id);
         setSessions((current) => [session, ...current]);
         return;
       }
@@ -1713,42 +1936,67 @@ export function App() {
                 </button>
               </div>
             </div>
-            {activeSession?.cwd && (
-              <p className="workspace-cwd" title={activeSession.cwd}>
-                {activeSession.cwd}
-              </p>
-            )}
             <button className="primary-button" type="button" onClick={handleCreateSession}>
               <MessageSquarePlus size={17} />
               New session
             </button>
             <div className="session-list">
-              {sessions.map((session) => (
-                <div
-                  className={`session-item ${session.session_id === activeSessionId ? "active" : ""}`}
-                  key={session.session_id}
-                >
-                  <button
-                    className="session-select"
-                    type="button"
-                    onClick={() => setActiveSessionId(session.session_id)}
-                  >
-                    <span className="session-title">
-                      {session.active && <span className="session-active-dot" title="Agent loaded" />}
-                      <span>{session.title || "(untitled)"}</span>
-                    </span>
-                    <small>Updated at: {formatDate(session.updated_at)}</small>
-                  </button>
-                  <button
-                    className="session-delete"
-                    type="button"
-                    onClick={() => void handleDeleteSession(session.session_id)}
-                    title="Delete session"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              ))}
+              {groupedSessions.map((group) => {
+                const collapsed = Boolean(collapsedWorkspaceGroups[group.key]);
+                const activeGroup = group.key === activeSessionWorkspaceKey;
+                return (
+                  <section className={`session-workspace-group ${activeGroup ? "active" : ""}`} key={group.key}>
+                    <button
+                      className="session-workspace-toggle"
+                      type="button"
+                      onClick={() => toggleWorkspaceGroup(group.key)}
+                      title={group.title}
+                      aria-expanded={!collapsed}
+                    >
+                      {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                      <Folder size={15} />
+                      <span>{group.label}</span>
+                      <small>{group.sessions.length}</small>
+                    </button>
+                    {!collapsed && (
+                      <div className="session-workspace-items">
+                        {group.sessions.map((session) => (
+                          <div
+                            className={`session-item ${session.session_id === activeSessionId ? "active" : ""} ${session.locked ? "locked" : ""}`}
+                            key={session.session_id}
+                          >
+                            <button
+                              className="session-select"
+                              type="button"
+                              onClick={() => selectSession(session.session_id)}
+                            >
+                              <span className="session-title">
+                                {session.locked ? (
+                                  <span title={session.lock_message || "Workspace unavailable"}>
+                                    <LockKeyhole size={14} />
+                                  </span>
+                                ) : session.active ? (
+                                  <span className="session-active-dot" title="Agent loaded" />
+                                ) : null}
+                                <span>{session.title || "(untitled)"}</span>
+                              </span>
+                              <small>{session.locked ? "Workspace unavailable" : `Updated at: ${formatDate(session.updated_at)}`}</small>
+                            </button>
+                            <button
+                              className="session-delete"
+                              type="button"
+                              onClick={() => void handleDeleteSession(session.session_id)}
+                              title="Delete session"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           </>
         ) : (
@@ -1773,8 +2021,42 @@ export function App() {
               )}
             </div>
             {!activeSession?.created_at && <p>Session will be created on first message</p>}
+            {!activeSession?.created_at && (
+              <div className="workspace-summary">
+                <span>Selected workspace</span>
+                <div className="workspace-summary-row">
+                  <p title={workspaceDraft || "Not selected"}>{workspaceDraft || "Not selected"}</p>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => {
+                      setWorkspacePickerOpen(true);
+                      void loadWorkspaceBrowser(workspaceDraft.trim() || undefined);
+                    }}
+                    disabled={busy}
+                  >
+                    <Folder size={15} />
+                    Browse
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </header>
+
+        {activeSessionLocked && (
+          <div className="workspace-lock-banner">
+            <LockKeyhole size={18} />
+            <div>
+              <strong>Workspace unavailable</strong>
+              <p>{activeSession?.lock_message || "Check the filesystem and try again."}</p>
+            </div>
+            <button className="secondary-button" type="button" onClick={() => void handleRecheckWorkspace()}>
+              <RefreshCcw size={15} />
+              Recheck
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="error-banner">
@@ -1877,7 +2159,7 @@ export function App() {
               onKeyDown={handleComposerKeyDown}
               placeholder="Ask lulu-agent..."
               rows={2}
-              disabled={currentSessionRunning || currentSessionMcpReloading || currentSessionModelSwitching}
+              disabled={composerDisabled}
             />
             <div className="composer-meta">
               <div className="runtime-status">
@@ -1902,6 +2184,7 @@ export function App() {
                   className={`model-config-pill ${modelConfig?.model ? "" : "unavailable"}`}
                   type="button"
                   title="Model configuration"
+                  disabled={activeSessionLocked}
                   onClick={() => {
                     updateModelPanelPosition();
                     setModelPanelOpen((current) => !current);
@@ -2141,7 +2424,9 @@ export function App() {
                     Refresh
                   </button>
                 </div>
-                {!activeSessionId ? (
+                {activeSessionLocked ? (
+                  <p className="muted">Workspace unavailable. Recheck the session before viewing trace.</p>
+                ) : !activeSessionId ? (
                   <p className="muted">Chat with lulu in this session to load trace.</p>
                 ) : traceTurns.length > 0 ? (
                   <div className="trace-list">
@@ -2245,6 +2530,7 @@ export function App() {
                 <div className="knowledge-header">
                   <strong>Task</strong>
                   <button className="text-button" type="button" onClick={() => void refreshTask()}>
+                    <RefreshCcw size={14} />
                     Refresh
                   </button>
                 </div>
@@ -2273,6 +2559,7 @@ export function App() {
                 <div className="knowledge-header">
                   <strong>Memory</strong>
                   <button className="text-button" type="button" onClick={() => void refreshMemory()}>
+                    <RefreshCcw size={14} />
                     Refresh
                   </button>
                 </div>
@@ -2292,6 +2579,7 @@ export function App() {
                 <div className="knowledge-header">
                   <strong>Skills</strong>
                   <button className="text-button" type="button" onClick={() => void refreshSkills()}>
+                    <RefreshCcw size={14} />
                     Refresh
                   </button>
                 </div>
@@ -2412,6 +2700,76 @@ export function App() {
           </button>
         )}
       </aside>
+
+      {workspacePickerOpen && (
+        <div className="workspace-modal-backdrop" role="presentation" onClick={closeWorkspacePicker}>
+          <div className="workspace-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="workspace-modal-header">
+              <div>
+                <h3>Select workspace</h3>
+                <p>Choose a directory before creating the session.</p>
+              </div>
+              <button className="icon-button" type="button" onClick={closeWorkspacePicker} title="Close">
+                <X size={17} />
+              </button>
+            </div>
+            <div className="workspace-modal-path">
+              <div>
+                <span>Current</span>
+                <strong title={workspaceBrowser?.path || ""}>{workspaceBrowser?.path || "-"}</strong>
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void loadWorkspaceBrowser(workspaceBrowser?.parent || undefined)}
+                disabled={!workspaceBrowser?.parent || workspaceBrowserLoading}
+              >
+                <ArrowUp size={15} />
+                Up
+              </button>
+            </div>
+            {workspaceBrowserError && <div className="workspace-modal-error">{workspaceBrowserError}</div>}
+            <div className="workspace-browser-list">
+              {workspaceBrowserLoading && <div className="workspace-browser-empty">Loading...</div>}
+              {!workspaceBrowserLoading && workspaceBrowser?.entries.length === 0 && (
+                <div className="workspace-browser-empty">No child directories</div>
+              )}
+              {!workspaceBrowserLoading &&
+                workspaceBrowser?.entries.map((entry) => (
+                  <button
+                    className="workspace-entry"
+                    key={entry.path}
+                    type="button"
+                    onClick={() => void loadWorkspaceBrowser(entry.path)}
+                  >
+                    <Folder size={16} />
+                    <span>{entry.name}</span>
+                    <ChevronRight size={16} />
+                  </button>
+                ))}
+            </div>
+            <div className="workspace-modal-actions">
+              <button className="secondary-button" type="button" onClick={closeWorkspacePicker}>
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  if (workspaceBrowser?.path) {
+                    setWorkspaceDraft(workspaceBrowser.path);
+                    closeWorkspacePicker();
+                  }
+                }}
+                disabled={!workspaceBrowser?.path || workspaceBrowserLoading}
+              >
+                <Check size={17} />
+                Use this directory
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

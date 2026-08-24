@@ -6,6 +6,8 @@ export type SessionSummary = {
   title?: string;
   message_count?: number;
   active?: boolean;
+  locked?: boolean;
+  lock_message?: string | null;
 };
 
 export type TranscriptMessage = {
@@ -84,6 +86,18 @@ export type ProviderModelsView = {
   models: string[];
   discovered: boolean;
   error?: string | null;
+};
+
+export type DirectoryEntry = {
+  name: string;
+  path: string;
+  kind: "directory";
+};
+
+export type DirectoryBrowseView = {
+  path: string;
+  parent?: string | null;
+  entries: DirectoryEntry[];
 };
 
 export type MemoryEntry = {

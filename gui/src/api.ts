@@ -1,4 +1,5 @@
 import type {
+  DirectoryBrowseView,
   MemoryView,
   McpReloadView,
   McpToolsView,
@@ -22,6 +23,18 @@ const WS_BASE =
   import.meta.env.VITE_WS_BASE ??
   API_BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -32,7 +45,20 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    let message = text || `Request failed: ${response.status}`;
+    let code: string | undefined;
+    try {
+      const payload = JSON.parse(text) as { detail?: string | { message?: string; code?: string } };
+      if (typeof payload.detail === "string") {
+        message = payload.detail;
+      } else if (payload.detail) {
+        message = payload.detail.message || message;
+        code = payload.detail.code;
+      }
+    } catch {
+      // Preserve the response text when the server did not return JSON.
+    }
+    throw new ApiError(message, response.status, code);
   }
   return response.json() as Promise<T>;
 }
@@ -42,9 +68,10 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return data.sessions;
 }
 
-export async function createSession(): Promise<SessionSummary> {
+export async function createSession(workspace?: string): Promise<SessionSummary> {
   const data = await requestJson<{ session: SessionSummary }>("/sessions", {
     method: "POST",
+    body: workspace ? JSON.stringify({ workspace }) : undefined,
   });
   return data.session;
 }
@@ -103,6 +130,14 @@ export function listProviderModels(provider: string): Promise<ProviderModelsView
   return requestJson<ProviderModelsView>(
     `/runtime/model/providers/${encodeURIComponent(provider)}/models`,
   );
+}
+
+export async function browseWorkspace(path?: string): Promise<DirectoryBrowseView> {
+  const data = await requestJson<DirectoryBrowseView>("/runtime/workspace/browse", {
+    method: "POST",
+    body: path ? JSON.stringify({ path }) : undefined,
+  });
+  return data;
 }
 
 export async function updateSessionModel(

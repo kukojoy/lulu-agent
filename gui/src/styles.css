@@ -112,6 +112,7 @@ button {
 .status-pill,
 .runtime-status,
 .primary-button,
+.secondary-button,
 .toolbar-actions {
   display: flex;
   align-items: center;
@@ -155,14 +156,6 @@ h2 {
   color: #697486;
 }
 
-.workspace-cwd {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .icon-button,
 .send-button {
   display: inline-grid;
@@ -189,6 +182,23 @@ h2 {
   color: #ffffff;
 }
 
+.secondary-button {
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid #cfd6e1;
+  border-radius: 7px;
+  padding: 0 11px;
+  background: #ffffff;
+  color: #263244;
+}
+
+.secondary-button:disabled,
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .panel-rail-button {
   display: inline-grid;
   place-items: center;
@@ -207,6 +217,49 @@ h2 {
   flex-direction: column;
   gap: 8px;
   overflow: auto;
+}
+
+.session-workspace-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-workspace-group.active > .session-workspace-toggle {
+  border-color: #c7d2df;
+  background: #ffffff;
+}
+
+.session-workspace-toggle {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.session-workspace-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-workspace-toggle small {
+  color: #697486;
+}
+
+.session-workspace-items {
+  display: grid;
+  gap: 8px;
+  padding-left: 12px;
 }
 
 .session-item {
@@ -273,6 +326,17 @@ h2 {
   background: #ffffff;
 }
 
+.session-item.locked {
+  border-color: #e5c8c8;
+  background: #fff8f8;
+}
+
+.session-item.locked .session-title svg,
+.session-item.locked small {
+  flex: 0 0 auto;
+  color: #9d2b2b;
+}
+
 .session-item:hover .session-delete,
 .session-item.active .session-delete {
   opacity: 1;
@@ -331,6 +395,35 @@ h2 {
   color: #697486;
   font-size: 16px;
   white-space: nowrap;
+}
+
+.workspace-summary {
+  display: grid;
+  max-width: 780px;
+  margin-top: 10px;
+  gap: 5px;
+  color: #4d5b6e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workspace-summary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-summary-row p {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #cfd8e5;
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #ffffff;
+  color: #263244;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .status-pill {
@@ -420,6 +513,27 @@ h2 {
   font-size: 14px;
 }
 
+.workspace-lock-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #e5c8c8;
+  background: #fff8f8;
+  color: #7f2525;
+}
+
+.workspace-lock-banner p {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.workspace-lock-banner .secondary-button {
+  width: auto;
+}
+
 .approval-banner {
   position: relative;
   z-index: 6;
@@ -476,6 +590,143 @@ h2 {
   border: 1px solid #1b6fb8;
   background: #1b6fb8;
   color: #ffffff;
+}
+
+.workspace-modal-backdrop {
+  position: fixed;
+  z-index: 200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 36%);
+}
+
+.workspace-modal {
+  display: grid;
+  width: min(720px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #cfd8e5;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 22px 70px rgb(21 31 46 / 28%);
+}
+
+.workspace-modal-header,
+.workspace-modal-path,
+.workspace-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-modal-header {
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e0e5ec;
+}
+
+.workspace-modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.workspace-modal-header p {
+  margin-top: 3px;
+  color: #697486;
+  font-size: 13px;
+}
+
+.workspace-modal-path {
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid #edf0f5;
+  background: #f8fafc;
+}
+
+.workspace-modal-path > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.workspace-modal-path span {
+  color: #697486;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workspace-modal-path strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #263244;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-modal-error {
+  padding: 9px 18px;
+  border-bottom: 1px solid #f1c9c9;
+  background: #fff0f0;
+  color: #9d2b2b;
+  font-size: 13px;
+}
+
+.workspace-browser-list {
+  min-height: 240px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.workspace-entry {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: #263244;
+  text-align: left;
+}
+
+.workspace-entry span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-entry:hover {
+  border-color: #c7d2df;
+  background: #f8fafc;
+}
+
+.workspace-browser-empty {
+  padding: 28px 12px;
+  color: #697486;
+  font-size: 13px;
+  text-align: center;
+}
+
+.workspace-modal-actions {
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid #e0e5ec;
+}
+
+.workspace-modal-actions .primary-button {
+  width: auto;
+  padding: 0 13px;
 }
 
 .chat-list {

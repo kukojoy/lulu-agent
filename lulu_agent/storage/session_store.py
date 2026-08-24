@@ -9,12 +9,20 @@ from lulu_agent.runtime.session.message import Message
 from lulu_agent.runtime.session.model import SessionRuntimeModel
 from lulu_agent.runtime.session.task_state import TaskState
 from lulu_agent.runtime.session.turn import Turn
+from lulu_agent.runtime.errors import (
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_SESSION_NOT_FOUND,
+    ERROR_SESSION_WORKSPACE_UNAVAILABLE,
+    ERROR_STORAGE,
+    ErrorType,
+    LuluError,
+)
 from lulu_agent.runtime.utils import get_local_time
 from lulu_agent.storage.session_record import SessionRecord, SessionRecordType
-from lulu_agent.storage.utils import is_safe_session_id, parse_jsonl_record
+from lulu_agent.storage.utils import JsonlRecordError, is_safe_session_id, parse_jsonl_record
 
 
-DEFAULT_SESSIONS_DIR = Path(".lulu") / "sessions"
+DEFAULT_SESSIONS_DIR = Path.home() / ".lulu" / "sessions"
 SESSION_INDEX_FILENAME = "sessions_index.jsonl"
 TITLE_MAX_CHARS = 60
 TURN_SUMMARY_MAX_RESPONSE_CHARS = 240
@@ -22,8 +30,14 @@ COMPRESSION_SUMMARY_MAX_CHARS = 500
 T = TypeVar("T", bound=SessionRuntimeModel)
 
 
-class SessionStoreError(RuntimeError):
-    pass
+class SessionStoreError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType = ERROR_STORAGE):
+        super().__init__(error_message, error_type)
+
+
+class SessionWorkspaceUnavailableError(SessionStoreError):
+    def __init__(self, error_message: str):
+        super().__init__(error_message, ERROR_SESSION_WORKSPACE_UNAVAILABLE)
 
 
 class SessionStore:
@@ -31,12 +45,17 @@ class SessionStore:
         self.root = Path(root)
         self.index_path = self.root / SESSION_INDEX_FILENAME
 
-    def create_session(self, cwd: Path | str | None = None, title: str = "") -> dict[str, Any]:
+    def create_session(self, cwd: Path, title: str = "") -> dict[str, Any]:
         """创建一个新的 session
         
         Returns:
             dict[str, Any]: session metadata
         """
+        if not isinstance(cwd, Path):
+            raise SessionStoreError(
+                "Session workspace must be a resolved Path.",
+                ERROR_INVALID_ARGUMENTS,
+            )
         self._ensure_root()
         now = get_local_time()
         session_id = _new_session_id(now)
@@ -44,7 +63,7 @@ class SessionStore:
             "session_id": session_id,
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
-            "cwd": str(Path(cwd or ".").resolve()),
+            "cwd": str(cwd),
             "title": title,
             "message_count": 0,
         }
@@ -164,6 +183,9 @@ class SessionStore:
             "compressions": [compression.to_dict() for compression in compressions[-10:]],
         }
 
+    def get_session_metadata(self, session_id: str) -> dict[str, Any]:
+        return self._get_latest_metadata_for_session(session_id)
+
     def _metadata_for_record_append(
         self,
         record: SessionRecord,
@@ -188,7 +210,7 @@ class SessionStore:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            raw_record = parse_jsonl_record(path, line_number, line)
+            raw_record = _parse_session_jsonl_record(path, line_number, line)
             try:
                 record = SessionRecord.from_dict(raw_record)
             except ValueError as exc:
@@ -210,7 +232,10 @@ class SessionStore:
         """获取指定 session 的最新 metadata"""
         latest_metadata = self._get_latest_metadatas_from_index().get(session_id)
         if latest_metadata is None:
-            raise SessionStoreError(f"Session metadata not found: {session_id}")
+            raise SessionStoreError(
+                f"Session metadata not found: {session_id}",
+                ERROR_SESSION_NOT_FOUND,
+            )
         return latest_metadata
 
     def _get_latest_metadatas_from_index(self) -> dict[str, dict[str, Any]]:
@@ -230,7 +255,7 @@ class SessionStore:
         ):
             if not line.strip():
                 continue
-            metadata: dict[str, Any] = parse_jsonl_record(self.index_path, line_number, line)
+            metadata = _parse_session_jsonl_record(self.index_path, line_number, line)
             session_id = metadata.get("session_id")
             if not isinstance(session_id, str) or not session_id:
                 raise SessionStoreError(
@@ -253,7 +278,7 @@ class SessionStore:
         ):
             if not line.strip():
                 continue
-            metadata: dict[str, Any] = parse_jsonl_record(self.index_path, line_number, line)
+            metadata = _parse_session_jsonl_record(self.index_path, line_number, line)
             record_session_id = metadata.get("session_id")
             if not isinstance(record_session_id, str) or not record_session_id:
                 raise SessionStoreError(
@@ -274,15 +299,28 @@ class SessionStore:
     def _session_path(self, session_id: str) -> Path:
         """构造 session id path"""
         if not is_safe_session_id(session_id):
-            raise SessionStoreError(f"Invalid session id: {session_id}")
+            raise SessionStoreError(
+                f"Invalid session id: {session_id}",
+                ERROR_INVALID_ARGUMENTS,
+            )
         return self.root / f"{session_id}.jsonl"
 
     def _existing_session_path(self, session_id: str) -> Path:
         """检验 session id path 是否存在, 并返回对应路径"""
         path = self._session_path(session_id)
         if not path.exists():
-            raise SessionStoreError(f"Session not found: {session_id}")
+            raise SessionStoreError(
+                f"Session not found: {session_id}",
+                ERROR_SESSION_NOT_FOUND,
+            )
         return path
+
+
+def _parse_session_jsonl_record(path: Path, line_number: int, line: str) -> dict[str, Any]:
+    try:
+        return parse_jsonl_record(path, line_number, line)
+    except JsonlRecordError as exc:
+        raise SessionStoreError(exc.error_message, exc.error_type) from exc
 
 
 def _new_session_id(created_at: datetime) -> str:

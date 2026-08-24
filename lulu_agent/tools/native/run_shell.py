@@ -1,6 +1,6 @@
 import subprocess
-from pathlib import Path
 
+from lulu_agent.runtime.workspace import current_session_workspace
 from lulu_agent.tools import ToolResult, tool, truncate_text
 from lulu_agent.runtime.errors import (
     ERROR_INVALID_ARGUMENTS,
@@ -33,6 +33,7 @@ MAX_SHELL_TIMEOUT_SECONDS = 600
 )
 def run_shell(args):
     command = args["command"]
+    cwd = current_session_workspace()
     timeout = args.get("timeout", DEFAULT_SHELL_TIMEOUT_SECONDS)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
         return ToolResult(
@@ -49,6 +50,7 @@ def run_shell(args):
             text=True,
             capture_output=True,
             timeout=timeout,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
@@ -56,7 +58,7 @@ def run_shell(args):
         stdout_result = truncate_text(stdout, MAX_SHELL_OUTPUT_CHARS)
         stderr_result = truncate_text(stderr, MAX_SHELL_OUTPUT_CHARS)
         output = {
-            "cwd": str(Path.cwd()),
+            "cwd": str(cwd),
             "stdout": stdout_result,
             "stderr": stderr_result,
             "exit_code": None,
@@ -76,7 +78,7 @@ def run_shell(args):
     return ToolResult(
         ok=result.returncode == 0,
         output={
-            "cwd": str(Path.cwd()),
+            "cwd": str(cwd),
             "stdout": stdout_result,
             "stderr": stderr_result,
             "exit_code": result.returncode,

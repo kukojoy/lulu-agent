@@ -1,4 +1,5 @@
-from lulu_agent.safety.utils import resolve_path
+from lulu_agent.runtime.utils import resolve_path
+from lulu_agent.runtime.workspace import current_session_workspace
 from lulu_agent.tools import ToolResult, tool
 from lulu_agent.runtime.errors import (
     ERROR_EXTERNAL_TOOL,
@@ -40,7 +41,8 @@ MAX_LINE_LENGTH = 2000
     },
 )
 def read_file(args):
-    path = resolve_path(args["path"])
+    cwd = current_session_workspace()
+    path = resolve_path(args["path"], cwd)
 
     if not path.exists():
         return ToolResult(ok=False, error=f"File not found: {path}", error_type=ERROR_NOT_FOUND)

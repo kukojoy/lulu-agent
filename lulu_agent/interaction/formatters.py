@@ -9,10 +9,13 @@ def format_sessions(sessions: list[dict[str, Any]]) -> str:
     for session in sessions:
         title = session.get("title") or "(untitled)"
         cwd = session.get("cwd") or ""
+        availability = " [locked]" if session.get("locked") else ""
         lines.append(
-            f"- {session.get('session_id')} updated={session.get('updated_at')} "
+            f"- {session.get('session_id')}{availability} updated={session.get('updated_at')} "
             f"messages={session.get('message_count', 0)} title={title} cwd={cwd}"
         )
+        if session.get("locked") and session.get("lock_message"):
+            lines.append(f"  {session['lock_message']}")
     return "\n".join(lines)
 
 

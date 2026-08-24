@@ -3,16 +3,23 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from lulu_agent.runtime.errors import (
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_STORAGE,
+    ErrorType,
+    LuluError,
+)
 from lulu_agent.runtime.events import RuntimeEvent
 from lulu_agent.runtime.utils import get_local_time
-from lulu_agent.storage.utils import is_safe_session_id, parse_jsonl_record
+from lulu_agent.storage.utils import JsonlRecordError, is_safe_session_id, parse_jsonl_record
 
 
-DEFAULT_TRACES_DIR = Path(".lulu") / "traces"
+DEFAULT_TRACES_DIR = Path.home() / ".lulu" / "traces"
 
 
-class TraceStoreError(RuntimeError):
-    pass
+class TraceStoreError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType = ERROR_STORAGE):
+        super().__init__(error_message, error_type)
 
 
 class TraceStore:
@@ -55,7 +62,10 @@ class TraceStore:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            record = parse_jsonl_record(path, line_number, line)
+            try:
+                record = parse_jsonl_record(path, line_number, line)
+            except JsonlRecordError as exc:
+                raise TraceStoreError(exc.error_message, exc.error_type) from exc
             _validate_trace_record(path, line_number, record, session_id)
             if turn_id is not None and record.get("turn_id") != turn_id:
                 continue
@@ -73,7 +83,10 @@ class TraceStore:
 
     def _trace_path(self, session_id: str) -> Path:
         if not is_safe_session_id(session_id):
-            raise TraceStoreError(f"Invalid session id: {session_id}")
+            raise TraceStoreError(
+                f"Invalid session id: {session_id}",
+                ERROR_INVALID_ARGUMENTS,
+            )
         return self.root / f"{session_id}.jsonl"
 
 

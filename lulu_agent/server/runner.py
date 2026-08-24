@@ -16,20 +16,26 @@ from lulu_agent.interaction import (
 )
 from lulu_agent.llm.client import LLMClient
 from lulu_agent.llm.response import LLMClientConfig
+from lulu_agent.runtime.errors import (
+    ERROR_INVALID_ARGUMENTS,
+    ERROR_SESSION_NOT_ACTIVE,
+    ERROR_SESSION_RUNNING,
+    ErrorType,
+    LuluError,
+)
 from lulu_agent.safety.approval import use_approval_provider
 from lulu_agent.server.agent_factory import build_server_agent
 from lulu_agent.server.approval import ServerApprovalProvider
 from lulu_agent.server.events import EventHub
 from lulu_agent.skills.store import SkillStore
 from lulu_agent.memory.store import MemoryStore
-from lulu_agent.storage.session_store import SessionStore
+from lulu_agent.storage.session_store import SessionStore, SessionStoreError
 from lulu_agent.storage.trace_store import TraceStore
 
 
-class ServerRunnerError(RuntimeError):
-    def __init__(self, message: str, code: str):
-        super().__init__(message)
-        self.code = code
+class ServerRunnerError(LuluError):
+    def __init__(self, error_message: str, error_type: ErrorType):
+        super().__init__(error_message, error_type)
 
 
 class ServerRunner:
@@ -58,8 +64,38 @@ class ServerRunner:
         self._session_model_configs: dict[str, LLMClientConfig] = {}
         self._lock = threading.Lock()
 
-    def create_session(self) -> dict[str, Any]:
-        return self.session_service.create_session(cwd=Path.cwd())
+    def create_session(self, workspace: str | Path | None = None) -> dict[str, Any]:
+        return self.session_service.create_session(workspace=workspace)
+
+    def browse_workspace(self, path: str | Path | None = None) -> dict[str, Any]:
+        root = Path(path or Path.cwd()).expanduser().resolve()
+        if not root.exists():
+            raise SessionStoreError(
+                f"Workspace not found: {root}",
+                ERROR_INVALID_ARGUMENTS,
+            )
+        if not root.is_dir():
+            raise SessionStoreError(
+                f"Workspace is not a directory: {root}",
+                ERROR_INVALID_ARGUMENTS,
+            )
+
+        entries = []
+        for child in sorted(root.iterdir(), key=lambda item: item.name.lower()):
+            if child.is_dir():
+                entries.append(
+                    {
+                        "name": child.name,
+                        "path": str(child.resolve()),
+                        "kind": "directory",
+                    }
+                )
+        parent = root.parent if root.parent != root else None
+        return {
+            "path": str(root),
+            "parent": str(parent.resolve()) if parent is not None else None,
+            "entries": entries,
+        }
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         sessions = self.session_service.list_sessions(limit=limit)
@@ -68,7 +104,8 @@ class ServerRunner:
         return [
             {
                 **session,
-                "active": session.get("session_id") in active_session_ids,
+                "active": not session.get("locked")
+                and session.get("session_id") in active_session_ids,
             }
             for session in sessions
         ]
@@ -129,8 +166,9 @@ class ServerRunner:
         self.session_service.resume_session(session_id)
         lock = self._lock_for_session(session_id)
         if not lock.acquire(blocking=False):
-            raise ServerRunnerError("session is already running.", code="session_running")
+            raise ServerRunnerError("session is already running.", ERROR_SESSION_RUNNING)
         try:
+            self.session_service.resume_session(session_id)
             with self._lock:
                 agent = self._agents.get(session_id)
             next_config = self.model_service.build_model_config(provider, model)
@@ -147,14 +185,19 @@ class ServerRunner:
             lock.release()
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
-        metadata = self.session_service.delete_session(session_id)
-        self.trace_store.delete_session_trace(session_id)
-        with self._lock:
-            self._agents.pop(session_id, None)
-            self._locks.pop(session_id, None)
-            self._approval_providers.pop(session_id, None)
-            self._session_model_configs.pop(session_id, None)
-        return metadata
+        lock = self._lock_for_session(session_id)
+        if not lock.acquire(blocking=False):
+            raise ServerRunnerError("session is already running.", ERROR_SESSION_RUNNING)
+        try:
+            metadata = self.session_service.delete_session(session_id)
+            self.trace_store.delete_session_trace(session_id)
+            with self._lock:
+                self._agents.pop(session_id, None)
+                self._approval_providers.pop(session_id, None)
+                self._session_model_configs.pop(session_id, None)
+            return metadata
+        finally:
+            lock.release()
 
     def subscribe_events(self, session_id: str) -> queue.Queue[dict[str, Any]]:
         return self.event_hub.subscribe(session_id)
@@ -203,12 +246,16 @@ class ServerRunner:
         self.session_service.resume_session(session_id)
         lock = self._lock_for_session(session_id)
         if not lock.acquire(blocking=False):
-            raise ServerRunnerError("session is already running.", code="session_running")
+            raise ServerRunnerError("session is already running.", ERROR_SESSION_RUNNING)
         try:
+            self.session_service.resume_session(session_id)
             with self._lock:
                 agent = self._agents.get(session_id)
             if agent is None:
-                raise ServerRunnerError("session agent is not loaded.", code="session_not_active")
+                raise ServerRunnerError(
+                    "session agent is not loaded.",
+                    ERROR_SESSION_NOT_ACTIVE,
+                )
             return agent.reload_mcp_tools()
         finally:
             lock.release()
@@ -216,11 +263,13 @@ class ServerRunner:
     def run_message(self, session_id: str, content: str) -> dict[str, Any]:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("message content must be a non-empty string.")
-        agent = self._agent_for_session(session_id)
+        self.session_service.resume_session(session_id)
         lock = self._lock_for_session(session_id)
         if not lock.acquire(blocking=False):
-            raise ServerRunnerError("session is already running.", code="session_running")
+            raise ServerRunnerError("session is already running.", ERROR_SESSION_RUNNING)
         try:
+            self.session_service.resume_session(session_id)
+            agent = self._agent_for_session(session_id)
             with use_approval_provider(self._approval_provider_for_session(session_id)):
                 response = agent.run(content.strip())
         finally:
@@ -247,24 +296,30 @@ class ServerRunner:
         return self._approval_provider_for_session(session_id).resolve(request_id, approved)
 
     def _agent_for_session(self, session_id: str) -> AgentLoop:
-        self.session_service.resume_session(session_id)
         with self._lock:
             agent = self._agents.get(session_id)
-            if agent is None:
-                model_config = self._session_model_configs.get(session_id)
-                if model_config is None:
-                    model_config = self.model_service.build_model_config()
-                agent = build_server_agent(
-                    session_store=self.session_store,
-                    trace_store=self.trace_store,
-                    memory_store=self.memory_store,
-                    skill_store=self.skill_store,
-                    event_hub=self.event_hub,
-                    session_id=session_id,
-                    model_config=model_config,
-                )
-                self._agents[session_id] = agent
+            model_config = self._session_model_configs.get(session_id)
+        if agent is not None:
             return agent
+
+        if model_config is None:
+            model_config = self.model_service.build_model_config()
+        agent = build_server_agent(
+            session_store=self.session_store,
+            trace_store=self.trace_store,
+            memory_store=self.memory_store,
+            skill_store=self.skill_store,
+            event_hub=self.event_hub,
+            session_id=session_id,
+            model_config=model_config,
+        )
+
+        with self._lock:
+            existing_agent = self._agents.get(session_id)
+            if existing_agent is not None:
+                return existing_agent
+            self._agents[session_id] = agent
+        return agent
 
     def _lock_for_session(self, session_id: str) -> threading.Lock:
         with self._lock:

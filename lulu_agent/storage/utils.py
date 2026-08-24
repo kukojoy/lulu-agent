@@ -4,6 +4,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lulu_agent.runtime.errors import ERROR_STORAGE, LuluError
+
+
+class JsonlRecordError(LuluError):
+    def __init__(self, error_message: str):
+        super().__init__(error_message, ERROR_STORAGE)
+
 
 def parse_jsonl_record(
     path: Path,
@@ -13,10 +20,14 @@ def parse_jsonl_record(
     try:
         record = json.loads(line)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSONL record at {path}:{line_number}: {exc.msg}") from exc
+        raise JsonlRecordError(
+            f"Invalid JSONL record at {path}:{line_number}: {exc.msg}"
+        ) from exc
 
     if not isinstance(record, dict):
-        raise RuntimeError(f"Invalid JSONL record at {path}:{line_number}: expected object.")
+        raise JsonlRecordError(
+            f"Invalid JSONL record at {path}:{line_number}: expected object."
+        )
     return record
 
 

@@ -2,7 +2,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from lulu_agent.safety.utils import resolve_path
+from lulu_agent.runtime.utils import resolve_path
+from lulu_agent.runtime.workspace import current_session_workspace
 from lulu_agent.tools import ToolResult, tool
 from lulu_agent.runtime.errors import (
     ERROR_EXTERNAL_TOOL,
@@ -64,7 +65,8 @@ def search_text(args):
     if not query:
         return ToolResult(ok=False, error="query must not be empty.", error_type=ERROR_INVALID_ARGUMENTS)
 
-    path = resolve_path(args.get("path") or ".")
+    cwd = current_session_workspace()
+    path = resolve_path(args.get("path") or ".", cwd)
 
     if not path.exists():
         return ToolResult(ok=False, error=f"Path not found: {path}", error_type=ERROR_NOT_FOUND)

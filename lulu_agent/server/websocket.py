@@ -5,6 +5,7 @@ import queue
 from typing import Any
 
 from lulu_agent.config import ConfigError
+from lulu_agent.runtime.errors import LuluError
 from lulu_agent.server.events import (
     build_server_error_event,
     build_server_ready_event,
@@ -28,17 +29,18 @@ async def handle_session_events_socket(
     await websocket.accept()
     try:
         runner.resume_session(session_id)
-    except SessionStoreError:
+    except SessionStoreError as exc:
         await websocket.send_json(build_server_error_event(
-            f"Session not found: {session_id}",
-            "session_not_found",
+            str(exc),
+            exc.error_type.value,
         ))
         await websocket.close(code=1008)
         return
 
     subscriber = runner.subscribe_events(session_id)
-    await websocket.send_json(build_server_ready_event(session_id, runner.get_runtime_state(session_id)))
     try:
+        if not await _send_ready_or_session_error(websocket, runner, session_id):
+            return
         await _send_subscribed_events(websocket, subscriber)
     except WebSocketDisconnect:
         pass
@@ -54,39 +56,59 @@ async def handle_session_run_socket(
     await websocket.accept()
     try:
         runner.resume_session(session_id)
-    except SessionStoreError:
+    except SessionStoreError as exc:
         await websocket.send_json(build_server_error_event(
-            f"Session not found: {session_id}",
-            "session_not_found",
+            str(exc),
+            exc.error_type.value,
         ))
         await websocket.close(code=1008)
         return
 
     subscriber = runner.subscribe_events(session_id)
-    await websocket.send_json(build_server_ready_event(session_id, runner.get_runtime_state(session_id)))
-
-    run_tasks: set[asyncio.Task] = set()
-    send_task = asyncio.create_task(_send_subscribed_events(websocket, subscriber))
-    receive_task = asyncio.create_task(
-        _receive_run_commands(websocket, runner, session_id, subscriber, run_tasks)
-    )
     try:
-        done, pending = await asyncio.wait(
-            {send_task, receive_task},
-            return_when=asyncio.FIRST_COMPLETED,
+        if not await _send_ready_or_session_error(websocket, runner, session_id):
+            return
+
+        run_tasks: set[asyncio.Task] = set()
+        send_task = asyncio.create_task(_send_subscribed_events(websocket, subscriber))
+        receive_task = asyncio.create_task(
+            _receive_run_commands(websocket, runner, session_id, subscriber, run_tasks)
         )
-        for task in done:
-            task.result()
-        for task in pending:
-            task.cancel()
-    except WebSocketDisconnect:
-        pass
+        try:
+            done, pending = await asyncio.wait(
+                {send_task, receive_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                task.result()
+            for task in pending:
+                task.cancel()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            send_task.cancel()
+            receive_task.cancel()
+            for task in run_tasks:
+                task.cancel()
     finally:
-        send_task.cancel()
-        receive_task.cancel()
-        for task in run_tasks:
-            task.cancel()
         runner.unsubscribe_events(session_id, subscriber)
+
+
+async def _send_ready_or_session_error(
+    websocket: WebSocket,
+    runner: ServerRunner,
+    session_id: str,
+) -> bool:
+    try:
+        runtime = runner.get_runtime_state(session_id)
+    except SessionStoreError as exc:
+        await websocket.send_json(
+            build_server_error_event(str(exc), exc.error_type.value)
+        )
+        await websocket.close(code=1008)
+        return False
+    await websocket.send_json(build_server_ready_event(session_id, runtime))
+    return True
 
 
 async def _send_subscribed_events(
@@ -111,11 +133,25 @@ async def _receive_run_commands(
     while True:
         command = await websocket.receive_json()
         if command.get("type") == "approval_response":
-            _handle_approval_response(command, runner, session_id, subscriber)
+            try:
+                _handle_approval_response(command, runner, session_id, subscriber)
+            except SessionStoreError as exc:
+                _publish_error(
+                    subscriber,
+                    str(exc),
+                    exc.error_type.value,
+                )
             continue
 
         if command.get("type") == "interrupt":
-            _handle_interrupt(runner, session_id, subscriber)
+            try:
+                _handle_interrupt(runner, session_id, subscriber)
+            except SessionStoreError as exc:
+                _publish_error(
+                    subscriber,
+                    str(exc),
+                    exc.error_type.value,
+                )
             continue
 
         if command.get("type") != "user_message":
@@ -146,14 +182,17 @@ async def _run_user_message(
         code = "server_error"
         if isinstance(exc, ValueError):
             code = "invalid_message"
-        elif isinstance(exc, SessionStoreError):
-            code = "session_not_found"
-        elif isinstance(exc, ConfigError):
-            code = "config_error"
+        elif isinstance(exc, LuluError):
+            code = exc.error_type.value
         runtime = None if isinstance(exc, SessionStoreError) else runner.get_runtime_state(session_id)
         _publish_error(subscriber, str(exc), code, runtime)
     except ServerRunnerError as exc:
-        _publish_error(subscriber, str(exc), exc.code, runner.get_runtime_state(session_id))
+        _publish_error(
+            subscriber,
+            str(exc),
+            exc.error_type.value,
+            runner.get_runtime_state(session_id),
+        )
     except Exception as exc:
         _publish_error(subscriber, str(exc), "unexpected_error", runner.get_runtime_state(session_id))
 

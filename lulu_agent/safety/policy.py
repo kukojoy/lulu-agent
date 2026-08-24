@@ -4,7 +4,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from lulu_agent.runtime.errors import ERROR_PERMISSION_DENIED, LuluError
-from lulu_agent.safety.utils import resolve_path
+from lulu_agent.runtime.utils import resolve_path
+from lulu_agent.runtime.workspace import current_session_workspace
 
 
 class SafetyDecisionType(StrEnum):
@@ -179,19 +180,19 @@ def check_shell_command_safety(
 
 def check_path_operation_safety(
     path: str | Path,
-    workspace_root: str | Path | None = None,
     operation: str | PathOperation = PATH_OPERATION_READ,
     safety_profile: str | SafetyProfile = DEFAULT_SAFETY_PROFILE,
 ) -> SafetyDecision:
     safety_profile = validate_safety_profile(safety_profile)
     operation = PathOperation(operation)
 
-    resolved = resolve_path(path, workspace_root=workspace_root)
+    cwd = current_session_workspace()
+    resolved = resolve_path(path, cwd)
     _ensure_not_sensitive_path(resolved, operation)
 
     if operation == PATH_OPERATION_WRITE:
         _ensure_path_operation_allowed(operation, safety_profile)
-        if safety_profile == SAFETY_PROFILE_WORKSPACE_WRITE and _is_outside_workspace(resolved, workspace_root):
+        if safety_profile == SAFETY_PROFILE_WORKSPACE_WRITE and _is_outside_workspace(resolved, cwd):
             return SafetyDecision(
                 decision=SAFETY_NEEDS_APPROVAL,
                 reason=f"writing outside workspace root: {resolved}",
@@ -206,11 +207,9 @@ def check_path_operation_safety(
 
 
 # === helpers ===
-def _is_outside_workspace(path: Path, workspace_root: str | Path | None = None) -> bool:
-    root = Path.cwd() if workspace_root is None else Path(workspace_root)
-    root = root.expanduser().resolve()
+def _is_outside_workspace(path: Path, cwd: Path) -> bool:
     try:
-        path.relative_to(root)
+        path.relative_to(cwd)
     except ValueError:
         return True
     return False
