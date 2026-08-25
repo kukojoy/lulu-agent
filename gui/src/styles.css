@@ -298,13 +298,26 @@ h2 {
   white-space: nowrap;
 }
 
-.session-active-dot {
+.session-status-dot {
   flex: 0 0 auto;
   width: 7px;
   height: 7px;
   border-radius: 999px;
+}
+
+.session-status-dot.ready {
   background: #2f9e73;
   box-shadow: 0 0 0 2px #dff4eb;
+}
+
+.session-status-dot.running {
+  background: #3b82d0;
+  box-shadow: 0 0 0 2px #dcecff;
+}
+
+.session-status-dot.waiting {
+  background: #d99a1f;
+  box-shadow: 0 0 0 2px #fff0c7;
 }
 
 .session-delete {
@@ -735,6 +748,38 @@ h2 {
   overflow: auto;
   padding: 18px 20px;
   overscroll-behavior: contain;
+}
+
+.chat-empty-state {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.chat-empty-state img {
+  width: min(220px, 52vw);
+  aspect-ratio: 1;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.chat-empty-state h3 {
+  margin: 0;
+  color: #263548;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.chat-empty-state p {
+  max-width: 420px;
+  margin: 0;
+  color: #697486;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .chat-message {

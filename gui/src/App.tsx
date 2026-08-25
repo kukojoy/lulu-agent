@@ -1343,10 +1343,16 @@ export function App() {
     setStreamingMessage((current) => `${current}${delta}`);
   }, []);
 
-  const markSessionActive = useCallback((sessionId: string) => {
+  const setSessionActivity = useCallback((
+    sessionId: string,
+    running: boolean,
+    waitingApproval = false,
+  ) => {
     setSessions((current) =>
       current.map((session) =>
-        session.session_id === sessionId ? { ...session, active: true } : session,
+        session.session_id === sessionId
+          ? { ...session, active: true, running, waiting_approval: waitingApproval }
+          : session,
       ),
     );
   }, []);
@@ -1356,7 +1362,7 @@ export function App() {
       if (!activeSessionId) {
         return;
       }
-      markSessionActive(activeSessionId);
+      setSessionActivity(activeSessionId, true);
       runningSessionIdRef.current = activeSessionId;
       setBusy(true);
       setRuntimeState((current) => ({
@@ -1371,7 +1377,7 @@ export function App() {
         notices: current?.session_id === activeSessionId ? current.notices : [],
       }));
     },
-    [activeSessionId, markSessionActive],
+    [activeSessionId, setSessionActivity],
   );
 
   const runSessionMessage = useCallback(
@@ -1380,10 +1386,12 @@ export function App() {
         setSessionError(sessionId, "Run socket is not ready.");
         clearLiveTurnState();
         runningSessionIdRef.current = "";
+        setSessionActivity(sessionId, false);
         setBusy(false);
         return;
       }
       runningSessionIdRef.current = sessionId;
+      setSessionActivity(sessionId, true);
       setBusy(true);
       setRuntimeState((current) => ({
         session_id: sessionId,
@@ -1398,7 +1406,7 @@ export function App() {
       }));
       socketRef.current.send(JSON.stringify({ type: "user_message", content }));
     },
-    [clearLiveTurnState, setSessionError],
+    [clearLiveTurnState, setSessionActivity, setSessionError],
   );
 
   useLayoutEffect(() => {
@@ -1409,6 +1417,16 @@ export function App() {
   useEffect(() => {
     refreshSessions().catch((nextError) => setError(String(nextError)));
   }, [refreshSessions]);
+
+  useEffect(() => {
+    if (!sessions.some((session) => session.running)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      refreshSessions().catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshSessions, sessions]);
 
   useEffect(() => {
     browseWorkspace()
@@ -1570,7 +1588,11 @@ export function App() {
           if (nextRuntimeState) {
             applyRuntimeState(nextRuntimeState);
             if (nextRuntimeState.active) {
-              markSessionActive(nextRuntimeState.session_id);
+              setSessionActivity(
+                nextRuntimeState.session_id,
+                nextRuntimeState.running,
+                Boolean(nextRuntimeState.pending_approval),
+              );
             }
             if (nextRuntimeState.running && nextRuntimeState.status === "streaming_assistant") {
               restoreStreamingMessageFromTrace(
@@ -1627,7 +1649,15 @@ export function App() {
           const currentRuntime = runtimeStateFromPayload(event.payload.runtime);
           if (currentRuntime) {
             applyRuntimeState(currentRuntime);
+            if (currentRuntime.active) {
+              setSessionActivity(
+                currentRuntime.session_id,
+                currentRuntime.running,
+                Boolean(currentRuntime.pending_approval),
+              );
+            }
           } else {
+            setSessionActivity(sessionId, false);
             setRuntimeState(
               activeSessionId
                 ? { session_id: activeSessionId, active: false, running: false, connected: true }
@@ -1663,6 +1693,7 @@ export function App() {
           if (request) {
             setApprovalRequest(request);
             setLiveRuntimeStatus("running_tool", event.turn_id || null);
+            setSessionActivity(sessionId, true, true);
           }
           return;
         }
@@ -1729,6 +1760,7 @@ export function App() {
               runningSessionIdRef.current = "";
               pendingSentMessageRef.current = "";
               setBusy(false);
+              setSessionActivity(sessionId, false);
               if (activeSessionId) {
                 setRuntimeState((current) => ({
                   session_id: activeSessionId,
@@ -1852,11 +1884,11 @@ export function App() {
     finishCreatingSession,
     handleSessionRequestError,
     isCurrentSessionSelection,
-    markSessionActive,
     markSessionLocked,
     refreshActiveSession,
     refreshSessions,
     runSessionMessage,
+    setSessionActivity,
     setSessionError,
   ]);
 
@@ -2100,7 +2132,10 @@ export function App() {
         };
         firstMessagePending = true;
         selectSession(session.session_id);
-        setSessions((current) => [session, ...current]);
+        setSessions((current) => [
+          { ...session, active: true, running: true },
+          ...current,
+        ]);
         return;
       }
       runningSessionIdRef.current = activeSessionId;
@@ -2128,6 +2163,7 @@ export function App() {
         approved,
       }),
     );
+    setSessionActivity(activeSessionId, true);
     setApprovalRequest(null);
   }
 
@@ -2243,8 +2279,12 @@ export function App() {
                                   <span title={session.lock_message || "Workspace unavailable"}>
                                     <LockKeyhole size={14} />
                                   </span>
+                                ) : session.waiting_approval ? (
+                                  <span className="session-status-dot waiting" title="Waiting approval" />
+                                ) : session.running ? (
+                                  <span className="session-status-dot running" title="Working" />
                                 ) : session.active ? (
-                                  <span className="session-active-dot" title="Agent loaded" />
+                                  <span className="session-status-dot ready" title="Ready" />
                                 ) : null}
                                 <span>{session.title || "(untitled)"}</span>
                               </span>
@@ -2353,6 +2393,13 @@ export function App() {
         )}
 
         <div className="chat-list">
+          {!activeSessionId && visibleChatItems.length === 0 && !showStreamingMessage && (
+            <div className="chat-empty-state">
+              <img src="/capybara-lulu.png" alt="水豚噜噜" />
+              <h3>和噜噜聊点什么</h3>
+              <p>输入你的想法、问题或任务，噜噜会从当前 workspace 开始工作。</p>
+            </div>
+          )}
           {visibleChatItems.map((item) => (
             <article className={`chat-message ${item.kind}`} key={item.id}>
               <div className="message-role">

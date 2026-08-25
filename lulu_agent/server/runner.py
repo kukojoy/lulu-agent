@@ -101,11 +101,26 @@ class ServerRunner:
         sessions = self.session_service.list_sessions(limit=limit)
         with self._lock:
             active_session_ids = set(self._agents)
+            running_session_ids = {
+                session_id
+                for session_id, lock in self._locks.items()
+                if lock.locked()
+            }
+            approval_providers = dict(self._approval_providers)
+        waiting_approval_session_ids = {
+            session_id
+            for session_id, provider in approval_providers.items()
+            if provider.pending_request() is not None
+        }
         return [
             {
                 **session,
                 "active": not session.get("locked")
                 and session.get("session_id") in active_session_ids,
+                "running": not session.get("locked")
+                and session.get("session_id") in running_session_ids,
+                "waiting_approval": not session.get("locked")
+                and session.get("session_id") in waiting_approval_session_ids,
             }
             for session in sessions
         ]

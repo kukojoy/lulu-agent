@@ -6,6 +6,8 @@ export type SessionSummary = {
   title?: string;
   message_count?: number;
   active?: boolean;
+  running?: boolean;
+  waiting_approval?: boolean;
   locked?: boolean;
   lock_message?: string | null;
 };
